@@ -2,7 +2,7 @@
 Main GUI application for Discord Rich Presence Game Selector.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 import configparser
 import os
 from database import GameDatabase
@@ -157,23 +157,56 @@ class DiscordRPCApp:
         self.sheets_radio.grid(row=0, column=2, padx=5)
 
         # Google Sheets URL entry
-        sheets_url_frame = ttk.Frame(game_frame)
-        sheets_url_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        self.sheets_url_frame = ttk.Frame(game_frame)
+        self.sheets_url_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
 
-        ttk.Label(sheets_url_frame, text="Google Sheets URL:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.sheets_url_entry = ttk.Entry(sheets_url_frame, width=40)
+        ttk.Label(self.sheets_url_frame, text="Google Sheets URL:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.sheets_url_entry = ttk.Entry(self.sheets_url_frame, width=40)
         self.sheets_url_entry.grid(row=0, column=1, padx=5)
         if self.google_sheet_url:
             self.sheets_url_entry.insert(0, self.google_sheet_url)
 
-        self.load_sheets_button = ttk.Button(sheets_url_frame, text="Load",
+        self.load_sheets_button = ttk.Button(self.sheets_url_frame, text="Load",
                                              command=self.load_google_sheets)
         self.load_sheets_button.grid(row=0, column=2, padx=5)
 
+        # Local file selection
+        self.local_file_frame = ttk.Frame(game_frame)
+        self.local_file_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+
+        ttk.Label(self.local_file_frame, text="Local File:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.local_file_entry = ttk.Entry(self.local_file_frame, width=40)
+        self.local_file_entry.grid(row=0, column=1, padx=5)
+        # Prefill default if exists
+        default_local = 'games_database.xlsx'
+        if os.path.exists(default_local):
+            self.local_file_entry.insert(0, default_local)
+
+        self.browse_file_button = ttk.Button(self.local_file_frame, text="Browse...",
+                                             command=self.browse_local_file)
+        self.browse_file_button.grid(row=0, column=2, padx=5)
+
+        self.load_local_button = ttk.Button(self.local_file_frame, text="Load",
+                                            command=self.load_local_file)
+        self.load_local_button.grid(row=0, column=3, padx=5)
+
         # Update state based on current source
-        if not self.use_google_sheets:
+        if self.use_google_sheets:
+            # Show Sheets frame, hide Local frame
+            self.sheets_url_entry.config(state=tk.NORMAL)
+            self.load_sheets_button.config(state=tk.NORMAL)
+            try:
+                self.local_file_frame.grid_remove()
+            except Exception:
+                pass
+        else:
+            # Show Local frame, hide Sheets frame
             self.sheets_url_entry.config(state=tk.DISABLED)
             self.load_sheets_button.config(state=tk.DISABLED)
+            try:
+                self.sheets_url_frame.grid_remove()
+            except Exception:
+                pass
 
         # Console dropdown
         ttk.Label(game_frame, text="Console:").grid(row=2, column=0, sticky=tk.W, pady=5)
@@ -356,20 +389,96 @@ class DiscordRPCApp:
         source = self.db_source_var.get()
         
         if source == "Google Sheets":
+            # Show Sheets frame and enable widgets
+            try:
+                self.sheets_url_frame.grid()
+            except Exception:
+                pass
             self.sheets_url_entry.config(state=tk.NORMAL)
             self.load_sheets_button.config(state=tk.NORMAL)
+            # Hide Local frame
+            try:
+                self.local_file_frame.grid_remove()
+            except Exception:
+                pass
             self.log_message("Switched to Google Sheets mode")
         else:
+            # Hide Sheets frame and disable widgets
             self.sheets_url_entry.config(state=tk.DISABLED)
             self.load_sheets_button.config(state=tk.DISABLED)
-            # Switch back to local file
             try:
+                self.sheets_url_frame.grid_remove()
+            except Exception:
+                pass
+            # Show Local frame
+            try:
+                self.local_file_frame.grid()
+            except Exception:
+                pass
+            # Switch back to local file using default path if provided
+            try:
+                path = self.local_file_entry.get().strip()
                 if self.db:
-                    self.db.switch_to_local_file()
-                    self.game_combo['values'] = self.db.get_all_game_titles()
-                    self.log_message("Switched to local file mode")
+                    self.db.switch_to_local_file(db_path=path if path else None)
+                else:
+                    self.db = GameDatabase()
+                # Refresh dropdowns
+                consoles = self.db.get_consoles()
+                self.console_combo['values'] = consoles
+                if consoles:
+                    self.console_combo.set(consoles[0])
+                    titles = self.db.get_all_game_titles_by_console(consoles[0])
+                else:
+                    titles = []
+                self.game_combo['values'] = titles
+                self.log_message("Switched to local file mode")
             except Exception as e:
                 self.log_message(f"ERROR: Failed to switch to local file - {e}")
+
+    def browse_local_file(self):
+        """Open a file dialog to select a local database file."""
+        filetypes = (
+            ("Excel files", "*.xlsx *.xls"),
+            ("CSV files", "*.csv"),
+            ("All files", "*.*"),
+        )
+        filename = filedialog.askopenfilename(title="Select database file", filetypes=filetypes)
+        if filename:
+            self.local_file_entry.delete(0, tk.END)
+            self.local_file_entry.insert(0, filename)
+            self.log_message(f"Selected local file: {os.path.basename(filename)}")
+
+    def load_local_file(self):
+        """Load the selected local database file and refresh UI."""
+        path = self.local_file_entry.get().strip()
+        if not path:
+            messagebox.showwarning("No file selected", "Please choose a local database file.")
+            return
+        if not os.path.exists(path):
+            messagebox.showerror("File not found", f"The file does not exist:\n{path}")
+            return
+        try:
+            # Switch database to selected local file
+            if self.db:
+                self.db.switch_to_local_file(db_path=path)
+            else:
+                self.db = GameDatabase()
+            # Refresh consoles and games
+            consoles = self.db.get_consoles()
+            self.console_combo['values'] = consoles
+            if consoles:
+                self.console_combo.set(consoles[0])
+                titles = self.db.get_all_game_titles_by_console(consoles[0])
+            else:
+                titles = []
+            self.game_combo['values'] = titles
+            games_count = sum(len(self.db.get_all_game_titles_by_console(c)) for c in consoles)
+            self.log_message(f"Loaded {games_count} games from local file across {len(consoles)} consoles")
+            messagebox.showinfo("Success", "Local database loaded successfully!")
+            self.use_google_sheets = False
+        except Exception as e:
+            self.log_message(f"ERROR: Failed to load local file - {e}")
+            messagebox.showerror("Error", f"Failed to load local file:\n{e}")
     
     def load_google_sheets(self):
         """Load database from Google Sheets URL."""
