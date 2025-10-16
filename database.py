@@ -1,11 +1,21 @@
 """
 Database module for reading game information from Excel/CSV files and Google Sheets.
+
+Now supports multi-sheet databases where each worksheet corresponds to a console
+(e.g., PS3, PS4, PS5). Provides console-aware helpers to list consoles and
+filter games by console.
 """
 import pandas as pd
 import os
-import gspread
-from google.oauth2.service_account import Credentials
-from google.auth.exceptions import GoogleAuthError
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    from google.auth.exceptions import GoogleAuthError
+except Exception:
+    # Allow module import without Google libs; will error only when used
+    gspread = None
+    Credentials = None
+    GoogleAuthError = Exception
 
 
 class GameDatabase:
@@ -26,9 +36,57 @@ class GameDatabase:
         self.use_google_sheets = use_google_sheets
         self.google_sheet_url = google_sheet_url
         self.credentials_path = credentials_path
-        self.games_data = None
-        self.gc = None  # Google Sheets client
+
+        # Combined DataFrame containing all games. Will include a 'Console' column
+        # when multiple worksheets are present.
+        self.games_data = None  # type: pd.DataFrame | None
+
+        # Optional mapping of console name -> DataFrame for that console
+        self.games_by_console = {}  # type: dict[str, pd.DataFrame]
+
+        # Google Sheets client
+        self.gc = None
+
         self.load_database()
+
+    @staticmethod
+    def _normalize_sheet_df(df: pd.DataFrame, console_name: str) -> pd.DataFrame:
+        """Normalize a single worksheet DataFrame to wide format with expected columns.
+
+        Supports two input formats:
+        - Wide format: columns are already the expected fields.
+        - Long format: columns include ['Game Title', 'Field', 'Value'] with one row per field.
+        """
+        df = df.copy()
+        df.columns = [str(c).strip() for c in df.columns]
+
+        expected_cols = [
+            'Game Title', 'Details', 'State', 'Large Image',
+            'Large Image Text', 'Small Image', 'Small Image Text'
+        ]
+
+        # Detect long format
+        if {'Game Title', 'Field', 'Value'}.issubset(set(df.columns)):
+            # Pivot to wide format
+            long_df = df[['Game Title', 'Field', 'Value']].copy()
+            long_df['Field'] = long_df['Field'].astype(str).str.strip()
+            pivot = long_df.pivot_table(index='Game Title', columns='Field', values='Value', aggfunc='first')
+            pivot = pivot.reset_index()
+            # Ensure expected columns
+            for col in expected_cols:
+                if col not in pivot.columns:
+                    pivot[col] = ""
+            wide = pivot[expected_cols]
+        else:
+            # Treat as wide; ensure expected columns exist
+            for col in expected_cols:
+                if col not in df.columns:
+                    df[col] = ""
+            wide = df[expected_cols]
+
+        wide = wide.fillna("")
+        wide['Console'] = console_name or 'Unknown'
+        return wide
     
     def load_database(self):
         """Load the game database from local file or Google Sheets."""
@@ -38,7 +96,11 @@ class GameDatabase:
             return self.load_from_local_file()
     
     def load_from_google_sheets(self):
-        """Load game database from Google Sheets."""
+        """Load game database from Google Sheets.
+
+        Supports multiple worksheets: each worksheet is treated as a console tab.
+        The worksheet title will be used as the 'Console' value.
+        """
         try:
             if not self.google_sheet_url:
                 raise ValueError("Google Sheets URL not provided")
@@ -52,6 +114,8 @@ class GameDatabase:
             # Try service account authentication first
             if self.credentials_path and os.path.exists(self.credentials_path):
                 try:
+                    if Credentials is None or gspread is None:
+                        raise RuntimeError("Google libraries not installed. Install requirements.")
                     creds = Credentials.from_service_account_file(
                         self.credentials_path, scopes=scopes
                     )
@@ -63,6 +127,8 @@ class GameDatabase:
             else:
                 # Try to use gspread's built-in service account discovery
                 try:
+                    if gspread is None:
+                        raise RuntimeError("gspread not installed. Install requirements.")
                     self.gc = gspread.service_account(filename=self.credentials_path)
                     print("Authenticated with default service account")
                 except Exception as e:
@@ -89,22 +155,30 @@ class GameDatabase:
                     f"Error: {e}"
                 )
             
-            # Get the first worksheet
-            worksheet = sheet.get_worksheet(0)
-            
-            # Get all values and convert to DataFrame
-            data = worksheet.get_all_values()
-            
-            if not data or len(data) < 2:
-                raise ValueError("Google Sheet is empty or has no data rows")
-            
-            # First row is headers
-            headers = data[0]
-            rows = data[1:]
-            
-            self.games_data = pd.DataFrame(rows, columns=headers)
-            
-            print(f"Loaded {len(self.games_data)} games from Google Sheets")
+            # Read all worksheets and build console mapping
+            self.games_by_console = {}
+            frames = []
+            for ws in sheet.worksheets():
+                ws_title = (ws.title or "").strip()
+                data = ws.get_all_values()
+                if not data or len(data) < 2:
+                    # Skip empty worksheets
+                    continue
+                headers = data[0]
+                rows = data[1:]
+                df = pd.DataFrame(rows, columns=headers)
+                norm = self._normalize_sheet_df(df, ws_title)
+
+                console_key = norm['Console'].iloc[0]
+                self.games_by_console[console_key] = norm.copy()
+                frames.append(norm)
+
+            if not frames:
+                raise ValueError("Google Sheet has no valid data in any worksheet")
+
+            # Concatenate all into one DataFrame
+            self.games_data = pd.concat(frames, ignore_index=True)
+            print(f"Loaded {len(self.games_data)} games from Google Sheets across {len(self.games_by_console)} consoles")
             return True
             
         except Exception as e:
@@ -117,60 +191,138 @@ class GameDatabase:
             return False
     
     def load_from_local_file(self):
-        """Load game database from local Excel or CSV file."""
+        """Load game database from local Excel or CSV file.
+
+        - If Excel with multiple sheets: each sheet is a console tab.
+        - If single sheet or CSV: treated as a single console named 'All'.
+        """
         try:
             if not os.path.exists(self.db_path):
                 raise FileNotFoundError(f"Database file not found: {self.db_path}")
             
-            # Try to read as Excel first, then CSV
+            # Try to read as Excel with multiple sheets
             if self.db_path.endswith('.xlsx') or self.db_path.endswith('.xls'):
-                self.games_data = pd.read_excel(self.db_path)
+                try:
+                    xl = pd.read_excel(self.db_path, sheet_name=None)
+                    if isinstance(xl, dict):
+                        self.games_by_console = {}
+                        frames = []
+                        for sheet_name, df in xl.items():
+                            if df is None or df.empty:
+                                continue
+                            norm = self._normalize_sheet_df(df, str(sheet_name).strip())
+                            self.games_by_console[norm['Console'].iloc[0]] = norm.copy()
+                            frames.append(norm)
+
+                        if frames:
+                            self.games_data = pd.concat(frames, ignore_index=True)
+                        else:
+                            # Fallback to single sheet read
+                            self.games_data = pd.read_excel(self.db_path)
+                            self.games_data['Console'] = 'All'
+                    else:
+                        # Single sheet
+                        self.games_data = xl
+                        self.games_data['Console'] = 'All'
+                except Exception:
+                    # Fallback to single sheet
+                    self.games_data = pd.read_excel(self.db_path)
+                    self.games_data['Console'] = 'All'
             elif self.db_path.endswith('.csv'):
                 self.games_data = pd.read_csv(self.db_path)
+                self.games_data['Console'] = 'All'
             else:
                 # Try Excel first, then CSV
                 try:
                     self.games_data = pd.read_excel(self.db_path)
-                except:
+                    self.games_data['Console'] = 'All'
+                except Exception:
                     self.games_data = pd.read_csv(self.db_path)
+                    self.games_data['Console'] = 'All'
             
-            print(f"Loaded {len(self.games_data)} games from local database")
+            # Normalize columns
+            self.games_data.columns = [str(c).strip() for c in self.games_data.columns]
+            expected_cols = [
+                'Game Title', 'Details', 'State', 'Large Image',
+                'Large Image Text', 'Small Image', 'Small Image Text',
+                'Console'
+            ]
+            for col in expected_cols:
+                if col not in self.games_data.columns:
+                    self.games_data[col] = ""
+
+            self.games_data = self.games_data[expected_cols].fillna("")
+            if not self.games_by_console:
+                # Build mapping from combined data
+                self.games_by_console = {
+                    c: df.copy() for c, df in self.games_data.groupby('Console')
+                }
+
+            print(f"Loaded {len(self.games_data)} games from local database across {len(self.games_by_console)} consoles")
             return True
         except Exception as e:
             print(f"Error loading local database: {e}")
             # Create empty dataframe with expected columns
             self.games_data = pd.DataFrame(columns=[
                 'Game Title', 'Details', 'State', 'Large Image', 
-                'Large Image Text', 'Small Image', 'Small Image Text'
+                'Large Image Text', 'Small Image', 'Small Image Text', 'Console'
             ])
+            self.games_by_console = {}
             return False
     
     def get_all_game_titles(self):
-        """
-        Get a list of all game titles in the database.
-        
-        Returns:
-            List of game titles
+        """Deprecated. Use get_games_by_console or get_all_game_titles_by_console.
+
+        Kept for backward compatibility; returns all titles across all consoles.
         """
         if self.games_data is None or self.games_data.empty:
             return []
         return self.games_data['Game Title'].tolist()
+
+    def get_consoles(self):
+        """Return a sorted list of available console names (worksheet names)."""
+        if self.games_by_console:
+            return sorted(list(self.games_by_console.keys()))
+        if self.games_data is not None and not self.games_data.empty and 'Console' in self.games_data.columns:
+            return sorted(self.games_data['Console'].dropna().unique().tolist())
+        return []
+
+    def get_all_game_titles_by_console(self, console):
+        """Return all game titles for a specific console."""
+        if not console:
+            return self.get_all_game_titles()
+        if self.games_by_console and console in self.games_by_console:
+            df = self.games_by_console[console]
+            if df is not None and not df.empty:
+                return df['Game Title'].dropna().tolist()
+            return []
+        if self.games_data is None or self.games_data.empty:
+            return []
+        df = self.games_data[self.games_data['Console'] == console]
+        return df['Game Title'].dropna().tolist()
     
-    def get_game_data(self, game_title):
+    def get_game_data(self, game_title, console: str | None = None):
         """
         Get all data for a specific game.
         
         Args:
             game_title: The title of the game to look up
+            console: Optional console to filter by
             
         Returns:
             Dictionary containing game data, or None if not found
         """
         if self.games_data is None or self.games_data.empty:
             return None
-        
-        game_row = self.games_data[self.games_data['Game Title'] == game_title]
-        
+
+        if console:
+            df = self.games_by_console.get(console)
+            if df is None or df.empty:
+                return None
+            game_row = df[df['Game Title'] == game_title]
+        else:
+            game_row = self.games_data[self.games_data['Game Title'] == game_title]
+
         if game_row.empty:
             return None
         
@@ -247,6 +399,10 @@ class GameDatabase:
         if db_path:
             self.db_path = db_path
         return self.load_database()
+
+    # Backwards-compat convenience alias
+    def get_games_by_console(self, console):
+        return self.get_all_game_titles_by_console(console)
 
 
 if __name__ == "__main__":
