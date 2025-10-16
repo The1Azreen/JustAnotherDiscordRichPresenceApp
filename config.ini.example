@@ -1,0 +1,10 @@
+[Discord]
+# Get your Client ID from https://discord.com/developers/applications
+CLIENT_ID = YOUR_CLIENT_ID_HERE
+
+[Settings]
+# Auto-connect on startup
+AUTO_CONNECT = True
+
+# Default update interval (seconds)
+UPDATE_INTERVAL = 15

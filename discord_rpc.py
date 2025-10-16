@@ -1,0 +1,187 @@
+"""
+Discord Rich Presence integration module.
+"""
+from pypresence import Presence
+import time
+import threading
+
+
+class DiscordRPC:
+    """Handles Discord Rich Presence connection and updates."""
+    
+    def __init__(self, client_id):
+        """
+        Initialize Discord RPC client.
+        
+        Args:
+            client_id: Discord application client ID
+        """
+        self.client_id = str(client_id)
+        self.rpc = None
+        self.connected = False
+        self.current_presence = {}
+        self._update_thread = None
+        self._stop_update = False
+    
+    def connect(self):
+        """
+        Connect to Discord Rich Presence.
+        
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            if self.connected:
+                print("Already connected to Discord")
+                return True
+            
+            self.rpc = Presence(self.client_id)
+            self.rpc.connect()
+            self.connected = True
+            print("Successfully connected to Discord RPC")
+            return True
+        except Exception as e:
+            print(f"Failed to connect to Discord: {e}")
+            self.connected = False
+            return False
+    
+    def disconnect(self):
+        """Disconnect from Discord Rich Presence."""
+        try:
+            self._stop_update = True
+            if self._update_thread and self._update_thread.is_alive():
+                self._update_thread.join(timeout=2)
+            
+            if self.rpc and self.connected:
+                self.rpc.close()
+                print("Disconnected from Discord RPC")
+            self.connected = False
+            self.rpc = None
+        except Exception as e:
+            print(f"Error disconnecting: {e}")
+    
+    def update_presence(self, details=None, state=None, large_image=None, 
+                       large_text=None, small_image=None, small_text=None,
+                       start_timestamp=None):
+        """
+        Update Discord Rich Presence.
+        
+        Args:
+            details: First line of presence (e.g., "Playing Pokemon Red")
+            state: Second line of presence (e.g., "Exploring Kanto")
+            large_image: Asset name or URL for large image
+            large_text: Hover text for large image
+            small_image: Asset name or URL for small image
+            small_text: Hover text for small image
+            start_timestamp: Unix timestamp for elapsed time
+        
+        Returns:
+            True if update successful, False otherwise
+        """
+        if not self.connected:
+            print("Not connected to Discord")
+            return False
+        
+        try:
+            # Build presence dictionary with only non-None values
+            presence = {}
+            
+            if details:
+                presence['details'] = str(details)
+            if state:
+                presence['state'] = str(state)
+            if large_image:
+                presence['large_image'] = str(large_image)
+            if large_text:
+                presence['large_text'] = str(large_text)
+            if small_image:
+                presence['small_image'] = str(small_image)
+            if small_text:
+                presence['small_text'] = str(small_text)
+            if start_timestamp:
+                presence['start'] = int(start_timestamp)
+            
+            # Update presence
+            self.rpc.update(**presence)
+            self.current_presence = presence.copy()
+            print("Presence updated successfully")
+            return True
+        except Exception as e:
+            print(f"Failed to update presence: {e}")
+            return False
+    
+    def clear_presence(self):
+        """Clear the current Discord Rich Presence."""
+        if not self.connected:
+            return False
+        
+        try:
+            self.rpc.clear()
+            self.current_presence = {}
+            print("Presence cleared")
+            return True
+        except Exception as e:
+            print(f"Failed to clear presence: {e}")
+            return False
+    
+    def set_game_presence(self, game_data, show_elapsed_time=True):
+        """
+        Set presence from game data dictionary.
+        
+        Args:
+            game_data: Dictionary containing game information
+            show_elapsed_time: Whether to show elapsed time
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        details = game_data.get('Details', '')
+        state = game_data.get('State', '')
+        large_image = game_data.get('Large Image', '')
+        large_text = game_data.get('Large Image Text', '')
+        small_image = game_data.get('Small Image', '')
+        small_text = game_data.get('Small Image Text', '')
+        
+        start_time = int(time.time()) if show_elapsed_time else None
+        
+        return self.update_presence(
+            details=details,
+            state=state,
+            large_image=large_image,
+            large_text=large_text,
+            small_image=small_image,
+            small_text=small_text,
+            start_timestamp=start_time
+        )
+    
+    def is_connected(self):
+        """Check if connected to Discord."""
+        return self.connected
+
+
+if __name__ == "__main__":
+    # Test the Discord RPC module
+    print("Discord RPC Test")
+    print("Note: You need a valid Client ID to test this properly")
+    print("Get one from: https://discord.com/developers/applications")
+    
+    # Example test (will fail without valid client ID)
+    client_id = "YOUR_CLIENT_ID_HERE"
+    rpc = DiscordRPC(client_id)
+    
+    if rpc.connect():
+        print("Testing presence update...")
+        rpc.update_presence(
+            details="Playing Pokemon Red",
+            state="Exploring Kanto",
+            large_image="pokemon",
+            large_text="Pokemon Red"
+        )
+        
+        # Keep presence active for 30 seconds
+        print("Presence active for 30 seconds...")
+        time.sleep(30)
+        
+        rpc.disconnect()
+    else:
+        print("Failed to connect. Check your client ID.")
