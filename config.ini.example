@@ -8,3 +8,15 @@ AUTO_CONNECT = True
 
 # Default update interval (seconds)
 UPDATE_INTERVAL = 15
+
+[GoogleSheets]
+# Set to True to use Google Sheets instead of local Excel file
+USE_GOOGLE_SHEETS = False
+
+# Google Sheet URL or ID
+# Example: https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
+SHEET_URL = 
+
+# Path to Google Service Account credentials JSON file
+# Leave empty to use default service account discovery
+CREDENTIALS_PATH = credentials.json
