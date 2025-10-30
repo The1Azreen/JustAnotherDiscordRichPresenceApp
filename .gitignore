@@ -34,6 +34,23 @@ wheels/
 config.ini
 credentials.json
 
+# Google Sheets credentials/tokens
+# Common filenames from Google API quickstarts and service accounts
+client_secret.json
+service_account.json
+token.json
+token.pickle
+*.pickle
+
+# Google Sheets exports/local databases
+games_database.xlsx
+
+# Data files (privacy)
+# Ignore all CSVs in data folder
+data/*.csv
+data/**/*.csv
+
+
 # OS
 .DS_Store
 Thumbs.db
