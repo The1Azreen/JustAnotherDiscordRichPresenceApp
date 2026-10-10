@@ -2,27 +2,33 @@
 Main GUI application for Discord Rich Presence Game Selector.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
+from tkinter import ttk, messagebox, filedialog
 import configparser
 import os
 from database import GameDatabase
 from discord_rpc import DiscordRPC
+import theme
 import time
+
+
+TAB_NAMES = ("Presence", "Images", "Settings", "Log")
 
 
 class DiscordRPCApp:
     """Main application window for Discord Rich Presence."""
-    
+
     def __init__(self, root):
         """Initialize the application."""
         self.root = root
         self.root.title("Discord Rich Presence - Game Selector")
-        self.root.geometry("700x650")
-        self.root.resizable(False, False)
-        
+        self.root.geometry("560x760")
+        self.root.minsize(480, 560)
+
         # Initialize variables
         self.client_id = None
         self.rpc = None
+        self.connected = False
+        self.field_vars = []
         self.db = None
         self.start_time = None
         self.use_google_sheets = False
@@ -100,118 +106,110 @@ class DiscordRPCApp:
     
     def create_widgets(self):
         """Create all GUI widgets."""
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        theme.apply_theme(self.root)
+        theme.route_mousewheel(self.root)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(2, weight=1)
 
-        # Title
-        title_label = ttk.Label(main_frame, text="Discord Rich Presence Manager",
-                                font=('Arial', 16, 'bold'))
-        title_label.grid(row=0, column=0, columnspan=2, pady=10)
+        self.build_header()
+        self.build_tab_bar()
 
-        # Connection section
-        connection_frame = ttk.LabelFrame(main_frame, text="Discord Connection", padding="10")
-        connection_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.tab_container = tk.Frame(self.root, bg=theme.BG)
+        self.tab_container.grid(row=2, column=0, sticky="nsew")
+        self.tab_container.columnconfigure(0, weight=1)
+        self.tab_container.rowconfigure(0, weight=1)
+        self.tabs = {}
+        self.build_presence_tab()
+        self.build_images_tab()
+        self.build_settings_tab()
+        self.build_log_tab()
 
-        self.connection_status = ttk.Label(connection_frame, text="Status: Not Connected",
-                                           foreground="red")
-        self.connection_status.grid(row=0, column=0, padx=5)
+        self.build_footer()
 
-        self.connect_button = ttk.Button(connection_frame, text="Connect",
-                                         command=self.connect_discord)
-        self.connect_button.grid(row=0, column=1, padx=5)
+        self.show_tab("Presence")
+        self.set_connected(False)
+        self.tick()
 
-        self.disconnect_button = ttk.Button(connection_frame, text="Disconnect",
-                                            command=self.disconnect_discord, state=tk.DISABLED)
-        self.disconnect_button.grid(row=0, column=2, padx=5)
+        # Initial log message
+        self.log_message("Application started. Please connect to Discord.")
+        if not self.client_id:
+            self.log_message("WARNING: Client ID not configured. Please enter your Discord Client ID.")
 
-        # Client ID section
-        client_frame = ttk.Frame(connection_frame)
-        client_frame.grid(row=1, column=0, columnspan=3, pady=5)
+    def build_header(self):
+        """Top bar with avatar, connection status and shortcut icons."""
+        header = tk.Frame(self.root, bg=theme.BG_SECONDARY, padx=16, pady=12)
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(1, weight=1)
 
-        ttk.Label(client_frame, text="Client ID:").grid(row=0, column=0, padx=5)
-        self.client_id_entry = ttk.Entry(client_frame, width=30)
-        self.client_id_entry.grid(row=0, column=1, padx=5)
-        if self.client_id:
-            self.client_id_entry.insert(0, self.client_id)
+        self.avatar = tk.Canvas(header, width=42, height=42, bg=theme.BG_SECONDARY,
+                                highlightthickness=0)
+        self.avatar.create_oval(1, 1, 37, 37, fill=theme.BLURPLE, outline="")
+        self.avatar.create_text(22, 21, text="▶", fill="#FFFFFF", font=theme.FONT_TITLE)
+        self.status_dot = self.avatar.create_oval(26, 26, 41, 41, fill=theme.OFFLINE,
+                                                  outline=theme.BG_SECONDARY, width=3)
+        self.avatar.grid(row=0, column=0, rowspan=2, padx=(0, 10))
 
-        # Game selection section
-        game_frame = ttk.LabelFrame(main_frame, text="Game Selection", padding="10")
-        game_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        tk.Label(header, text="Rich Presence Manager", bg=theme.BG_SECONDARY,
+                 fg=theme.TEXT_STRONG, font=theme.FONT_TITLE).grid(row=0, column=1, sticky="sw")
+        self.connection_status = tk.Label(header, text="Disconnected", bg=theme.BG_SECONDARY,
+                                          fg=theme.TEXT_MUTED, font=theme.FONT_SMALL)
+        self.connection_status.grid(row=1, column=1, sticky="nw")
 
-        # Database source selection
-        source_frame = ttk.Frame(game_frame)
-        source_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        theme.FlatButton(header, text="?", variant="ghost", padx=10, pady=2,
+                         font=theme.FONT_TITLE,
+                         command=self.show_google_sheets_help).grid(row=0, column=2, rowspan=2)
+        theme.FlatButton(header, text="⚙", variant="ghost", padx=8, pady=2,
+                         font=(theme.SYMBOL, 14),
+                         command=lambda: self.show_tab("Settings")).grid(row=0, column=3, rowspan=2, padx=(4, 0))
 
-        ttk.Label(source_frame, text="Database Source:").grid(row=0, column=0, sticky=tk.W, padx=5)
+    def build_tab_bar(self):
+        """Segmented tab buttons under the header."""
+        bar = tk.Frame(self.root, bg=theme.BG_SECONDARY, padx=16)
+        bar.grid(row=1, column=0, sticky="ew")
+        self.tab_buttons = {}
+        for i, name in enumerate(TAB_NAMES):
+            bar.columnconfigure(i, weight=1, uniform="tabs")
+            button = theme.FlatButton(bar, text=name, variant="tab", font=theme.FONT_BUTTON,
+                                      command=lambda n=name: self.show_tab(n))
+            button.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 6, 0), pady=(0, 12))
+            self.tab_buttons[name] = button
 
-        self.db_source_var = tk.StringVar(value="Google Sheets" if self.use_google_sheets else "Local File")
-        self.local_radio = ttk.Radiobutton(source_frame, text="Local File",
-                                           variable=self.db_source_var, value="Local File",
-                                           command=self.on_db_source_change)
-        self.local_radio.grid(row=0, column=1, padx=5)
+    def show_tab(self, name):
+        """Raise the given tab and highlight its button."""
+        self.tabs[name].tkraise()
+        for tab_name, button in self.tab_buttons.items():
+            button.config(variant="tab_active" if tab_name == name else "tab")
 
-        self.sheets_radio = ttk.Radiobutton(source_frame, text="Google Sheets",
-                                            variable=self.db_source_var, value="Google Sheets",
-                                            command=self.on_db_source_change)
-        self.sheets_radio.grid(row=0, column=2, padx=5)
+    def add_tab(self, name):
+        """Create a scrollable tab page and return a Form to fill it."""
+        page = theme.ScrollFrame(self.tab_container)
+        page.grid(row=0, column=0, sticky="nsew")
+        page.inner.configure(padx=24, pady=20)
+        self.tabs[name] = page
+        return theme.Form(page.inner)
 
-        # Google Sheets URL entry
-        self.sheets_url_frame = ttk.Frame(game_frame)
-        self.sheets_url_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+    def add_field(self, form, label, hint=None, live_preview=True):
+        """Add a labelled text input to a form and return the entry."""
+        var = tk.StringVar()
+        self.field_vars.append(var)
+        if live_preview:
+            var.trace_add("write", self.update_preview)
+        form.add(theme.section_label(form.body, label), pady=(0, 6))
+        box, entry = theme.make_entry(form.body, textvariable=var)
+        form.add(box, pady=(0, 0 if hint else 16))
+        if hint:
+            form.add(theme.hint_label(form.body, hint), pady=(6, 16))
+        return entry
 
-        ttk.Label(self.sheets_url_frame, text="Google Sheets URL:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.sheets_url_entry = ttk.Entry(self.sheets_url_frame, width=40)
-        self.sheets_url_entry.grid(row=0, column=1, padx=5)
-        if self.google_sheet_url:
-            self.sheets_url_entry.insert(0, self.google_sheet_url)
-
-        self.load_sheets_button = ttk.Button(self.sheets_url_frame, text="Load",
-                                             command=self.load_google_sheets)
-        self.load_sheets_button.grid(row=0, column=2, padx=5)
-
-        # Local file selection
-        self.local_file_frame = ttk.Frame(game_frame)
-        self.local_file_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
-
-        ttk.Label(self.local_file_frame, text="Local File:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.local_file_entry = ttk.Entry(self.local_file_frame, width=40)
-        self.local_file_entry.grid(row=0, column=1, padx=5)
-        # Prefill default if exists
-        default_local = 'games_database.xlsx'
-        if os.path.exists(default_local):
-            self.local_file_entry.insert(0, default_local)
-
-        self.browse_file_button = ttk.Button(self.local_file_frame, text="Browse...",
-                                             command=self.browse_local_file)
-        self.browse_file_button.grid(row=0, column=2, padx=5)
-
-        self.load_local_button = ttk.Button(self.local_file_frame, text="Load",
-                                            command=self.load_local_file)
-        self.load_local_button.grid(row=0, column=3, padx=5)
-
-        # Update state based on current source
-        if self.use_google_sheets:
-            # Show Sheets frame, hide Local frame
-            self.sheets_url_entry.config(state=tk.NORMAL)
-            self.load_sheets_button.config(state=tk.NORMAL)
-            try:
-                self.local_file_frame.grid_remove()
-            except Exception:
-                pass
-        else:
-            # Show Local frame, hide Sheets frame
-            self.sheets_url_entry.config(state=tk.DISABLED)
-            self.load_sheets_button.config(state=tk.DISABLED)
-            try:
-                self.sheets_url_frame.grid_remove()
-            except Exception:
-                pass
+    def build_presence_tab(self):
+        """Game picker, presence text and a live Discord-style preview."""
+        form = self.add_tab("Presence")
+        form.add(self.build_preview_card(form.body), pady=(0, 20))
 
         # Console dropdown
-        ttk.Label(game_frame, text="Console:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.console_combo = ttk.Combobox(game_frame, width=25, state='readonly')
-        self.console_combo.grid(row=2, column=1, padx=10, pady=5, sticky=tk.W)
+        form.add(theme.section_label(form.body, "Console"), pady=(0, 6))
+        self.console_combo = ttk.Combobox(form.body, state='readonly', font=theme.FONT_BODY)
+        form.add(self.console_combo, pady=(0, 16))
         self.console_combo.bind('<<ComboboxSelected>>', self.on_console_selected)
         # Populate consoles if available
         try:
@@ -223,12 +221,11 @@ class DiscordRPCApp:
             self.console_combo['values'] = []
 
         # Game dropdown
-        ttk.Label(game_frame, text="Select Game:").grid(row=3, column=0, sticky=tk.W, pady=5)
-
-        self.game_combo = ttk.Combobox(game_frame, width=40, state='readonly')
-        self.game_combo.grid(row=3, column=1, padx=10, pady=5)
+        form.add(theme.section_label(form.body, "Game"), pady=(0, 6))
+        self.game_combo = ttk.Combobox(form.body, state='readonly', font=theme.FONT_BODY)
+        form.add(self.game_combo)
         # Initialize games based on selected console
-        initial_console = self.console_combo.get() if hasattr(self, 'console_combo') else None
+        initial_console = self.console_combo.get()
         try:
             if initial_console:
                 titles = self.db.get_all_game_titles_by_console(initial_console)
@@ -238,82 +235,280 @@ class DiscordRPCApp:
             titles = []
         self.game_combo['values'] = titles
         self.game_combo.bind('<<ComboboxSelected>>', self.on_game_selected)
+        self.game_combo.bind('<<ComboboxSelected>>', self.update_preview, add="+")
 
-        ttk.Button(game_frame, text="Reload Database",
-                   command=self.reload_database).grid(row=3, column=2, padx=5)
+        form.add(theme.divider(form.body), pady=20)
 
-        # Game details section
-        details_frame = ttk.LabelFrame(main_frame, text="Game Details", padding="10")
-        details_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.details_entry = self.add_field(form, "Details", "The first line shown under the game name.")
+        self.state_entry = self.add_field(form, "State", "The second line, e.g. what you're doing in game.")
 
-        # Details field
-        ttk.Label(details_frame, text="Details:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.details_entry = ttk.Entry(details_frame, width=50)
-        self.details_entry.grid(row=0, column=1, padx=10, pady=5)
+        form.add(theme.divider(form.body), pady=(4, 20))
 
-        # State field
-        ttk.Label(details_frame, text="State:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.state_entry = ttk.Entry(details_frame, width=50)
-        self.state_entry.grid(row=1, column=1, padx=10, pady=5)
-
-        # Large image
-        ttk.Label(details_frame, text="Large Image (Asset Key):").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.large_image_entry = ttk.Entry(details_frame, width=50)
-        self.large_image_entry.grid(row=2, column=1, padx=10, pady=5)
-
-        # Large image text
-        ttk.Label(details_frame, text="Large Image Text (Hover Text):").grid(row=3, column=0, sticky=tk.W, pady=5)
-        self.large_text_entry = ttk.Entry(details_frame, width=50)
-        self.large_text_entry.grid(row=3, column=1, padx=10, pady=5)
-
-        # Small image
-        ttk.Label(details_frame, text="Small Image (Asset Key):").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.small_image_entry = ttk.Entry(details_frame, width=50)
-        self.small_image_entry.grid(row=4, column=1, padx=10, pady=5)
-
-        # Small image text
-        ttk.Label(details_frame, text="Small Image Text (Hover Text):").grid(row=5, column=0, sticky=tk.W, pady=5)
-        self.small_text_entry = ttk.Entry(details_frame, width=50)
-        self.small_text_entry.grid(row=5, column=1, padx=10, pady=5)
-
-        # Show elapsed time checkbox
+        # Show elapsed time toggle
+        row = tk.Frame(form.body, bg=theme.BG)
+        row.columnconfigure(0, weight=1)
+        tk.Label(row, text="Show elapsed time", bg=theme.BG, fg=theme.TEXT_STRONG,
+                 font=theme.FONT_BODY).grid(row=0, column=0, sticky="w")
         self.show_time_var = tk.BooleanVar(value=True)
-        self.time_checkbox = ttk.Checkbutton(details_frame, text="Show Elapsed Time",
-                                             variable=self.show_time_var)
-        self.time_checkbox.grid(row=6, column=1, sticky=tk.W, padx=10, pady=5)
+        self.show_time_var.trace_add("write", self.update_preview)
+        theme.Toggle(row, variable=self.show_time_var).grid(row=0, column=1, sticky="e")
+        form.add(row)
+        form.add(theme.hint_label(form.body, "Displays a timer that starts the first time you "
+                                             "update your presence."), pady=(6, 0))
 
-        # Action buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=4, column=0, columnspan=2, pady=10)
+    def build_preview_card(self, parent):
+        """Card mimicking the 'Playing' activity on a Discord profile."""
+        card = tk.Frame(parent, bg=theme.CARD, padx=16, pady=14)
+        card.columnconfigure(1, weight=1)
+        tk.Label(card, text="Playing", bg=theme.CARD, fg=theme.TEXT,
+                 font=theme.FONT_HEADING).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
-        self.update_button = ttk.Button(button_frame, text="Update Presence",
-                                        command=self.update_presence, state=tk.DISABLED)
-        self.update_button.grid(row=0, column=0, padx=5)
+        self.preview_art = tk.Canvas(card, width=72, height=72, bg=theme.CARD, highlightthickness=0)
+        theme.round_rect(self.preview_art, 0, 0, 64, 64, 10, fill=theme.BLURPLE)
+        self.preview_initials = self.preview_art.create_text(32, 32, text="?", fill="#FFFFFF",
+                                                             font=theme.FONT_DISPLAY)
+        self.preview_small = self.preview_art.create_oval(46, 46, 70, 70, fill=theme.BG_TERTIARY,
+                                                          outline=theme.CARD, width=3)
+        self.preview_art.grid(row=1, column=0, sticky="nw", padx=(0, 10))
 
-        self.clear_button = ttk.Button(button_frame, text="Clear Presence",
-                                       command=self.clear_presence, state=tk.DISABLED)
-        self.clear_button.grid(row=0, column=1, padx=5)
+        text = tk.Frame(card, bg=theme.CARD)
+        text.grid(row=1, column=1, sticky="nsew")
+        self.preview_title = tk.Label(text, bg=theme.CARD, fg=theme.TEXT_STRONG, anchor="w",
+                                      font=theme.FONT_BODY_LARGE)
+        self.preview_details = tk.Label(text, bg=theme.CARD, fg=theme.TEXT, anchor="w",
+                                        font=theme.FONT_BODY)
+        self.preview_state = tk.Label(text, bg=theme.CARD, fg=theme.TEXT, anchor="w",
+                                      font=theme.FONT_BODY)
+        self.preview_timer = tk.Label(text, bg=theme.CARD, fg=theme.GREEN, anchor="w",
+                                      font=theme.FONT_BUTTON)
+        for row, label in enumerate((self.preview_title, self.preview_details,
+                                     self.preview_state, self.preview_timer)):
+            label.grid(row=row, column=0, sticky="w")
+        return card
 
-        # Log section
-        log_frame = ttk.LabelFrame(main_frame, text="Activity Log", padding="5")
-        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+    def build_images_tab(self):
+        """Asset key and hover text inputs."""
+        form = self.add_tab("Images")
+        form.add(theme.hint_label(form.body,
+                                  "Discord only shows images uploaded as Art Assets under Rich Presence "
+                                  "in the Developer Portal. Enter the asset key (its name), not a URL."),
+                 pady=(0, 20))
+        self.large_image_entry = self.add_field(form, "Large image (asset key)")
+        self.large_text_entry = self.add_field(form, "Large image text",
+                                               "Shown when hovering over the large image.")
+        form.add(theme.divider(form.body), pady=(4, 20))
+        self.small_image_entry = self.add_field(form, "Small image (asset key)",
+                                                "Shown as a badge in the corner of the large image.")
+        self.small_text_entry = self.add_field(form, "Small image text",
+                                               "Shown when hovering over the small image.")
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, width=80,
-                                                  state=tk.DISABLED)
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    def build_settings_tab(self):
+        """Client ID and database source settings."""
+        form = self.add_tab("Settings")
 
-        # Initial log message
-        self.log_message("Application started. Please connect to Discord.")
-        if not self.client_id:
-            self.log_message("WARNING: Client ID not configured. Please enter your Discord Client ID.")
-    
+        self.client_id_entry = self.add_field(form, "Discord Client ID",
+                                              "Your Application ID from the Discord Developer Portal.",
+                                              live_preview=False)
+        if self.client_id:
+            self.client_id_entry.insert(0, self.client_id)
+
+        form.add(theme.divider(form.body), pady=(4, 20))
+
+        # Database source segmented control
+        form.add(theme.section_label(form.body, "Database source"), pady=(0, 6))
+        self.db_source_var = tk.StringVar(value="Google Sheets" if self.use_google_sheets else "Local File")
+        segment = tk.Frame(form.body, bg=theme.BG)
+        self.source_buttons = {}
+        for i, value in enumerate(("Local File", "Google Sheets")):
+            segment.columnconfigure(i, weight=1, uniform="source")
+            button = theme.FlatButton(segment, text=value, variant="tab", font=theme.FONT_BUTTON,
+                                      command=lambda v=value: self.select_db_source(v))
+            button.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 6, 0))
+            self.source_buttons[value] = button
+        form.add(segment, pady=(0, 16))
+        self.db_source_var.trace_add("write", self.refresh_source_buttons)
+        self.refresh_source_buttons()
+
+        holder = tk.Frame(form.body, bg=theme.BG)
+        holder.columnconfigure(0, weight=1)
+        form.add(holder)
+
+        # Local file selection
+        self.local_file_frame = tk.Frame(holder, bg=theme.BG)
+        self.local_file_frame.grid(row=0, column=0, sticky="ew")
+        self.local_file_frame.columnconfigure(0, weight=1)
+        theme.section_label(self.local_file_frame, "Database file").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        box, self.local_file_entry = theme.make_entry(self.local_file_frame)
+        box.grid(row=1, column=0, sticky="ew")
+        # Prefill default if exists
+        default_local = 'games_database.xlsx'
+        if os.path.exists(default_local):
+            self.local_file_entry.insert(0, default_local)
+        self.browse_file_button = theme.FlatButton(self.local_file_frame, text="Browse", variant="secondary",
+                                                   command=self.browse_local_file)
+        self.browse_file_button.grid(row=1, column=1, sticky="ns", padx=(8, 0))
+        self.load_local_button = theme.FlatButton(self.local_file_frame, text="Load",
+                                                  command=self.load_local_file)
+        self.load_local_button.grid(row=1, column=2, sticky="ns", padx=(8, 0))
+        theme.hint_label(self.local_file_frame, "Excel (.xlsx) or CSV file with your games.").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        # Google Sheets URL entry
+        self.sheets_url_frame = tk.Frame(holder, bg=theme.BG)
+        self.sheets_url_frame.grid(row=0, column=0, sticky="ew")
+        self.sheets_url_frame.columnconfigure(0, weight=1)
+        theme.section_label(self.sheets_url_frame, "Google Sheets URL").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        box, self.sheets_url_entry = theme.make_entry(self.sheets_url_frame)
+        box.grid(row=1, column=0, sticky="ew")
+        if self.google_sheet_url:
+            self.sheets_url_entry.insert(0, self.google_sheet_url)
+        self.load_sheets_button = theme.FlatButton(self.sheets_url_frame, text="Load",
+                                                   command=self.load_google_sheets)
+        self.load_sheets_button.grid(row=1, column=1, sticky="ns", padx=(8, 0))
+        help_link = tk.Label(self.sheets_url_frame, text="How do I set up Google Sheets?",
+                             bg=theme.BG, fg=theme.LINK, font=theme.FONT_SMALL, cursor="hand2")
+        help_link.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        help_link.bind("<Button-1>", lambda e: self.show_google_sheets_help())
+
+        # Update state based on current source
+        if self.use_google_sheets:
+            self.local_file_frame.grid_remove()
+        else:
+            self.sheets_url_entry.config(state=tk.DISABLED)
+            self.load_sheets_button.config(state=tk.DISABLED)
+            self.sheets_url_frame.grid_remove()
+
+        form.add(theme.divider(form.body), pady=20)
+
+        form.add(theme.FlatButton(form.body, text="Reload Database", variant="secondary",
+                                  command=self.reload_database), sticky="w")
+        form.add(theme.hint_label(form.body, "Re-read the current source after editing your games."),
+                 pady=(6, 0))
+
+    def build_log_tab(self):
+        """Activity log page."""
+        page = tk.Frame(self.tab_container, bg=theme.BG, padx=24, pady=20)
+        page.grid(row=0, column=0, sticky="nsew")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
+        self.tabs["Log"] = page
+
+        theme.section_label(page, "Activity log").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        self.log_text = tk.Text(page, bg=theme.BG_TERTIARY, fg=theme.TEXT, font=theme.FONT_BODY,
+                                relief="flat", bd=0, highlightthickness=0, padx=10, pady=8,
+                                wrap=tk.WORD, state=tk.DISABLED, selectbackground=theme.BLURPLE)
+        self.log_text.grid(row=1, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(page, orient="vertical", style="Dark.Vertical.TScrollbar",
+                                  command=self.log_text.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        self.log_text.tag_configure("time", foreground=theme.TEXT_MUTED)
+        self.log_text.tag_configure("error", foreground=theme.RED)
+        self.log_text.tag_configure("warning", foreground=theme.YELLOW)
+
+    def build_footer(self):
+        """Bottom bar with the main action, timer and secondary actions."""
+        footer = tk.Frame(self.root, bg=theme.BG_SECONDARY, padx=16, pady=12)
+        footer.grid(row=3, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+
+        self.primary_button = theme.FlatButton(footer, pady=8)
+        self.primary_button.grid(row=0, column=0, sticky="ew")
+        self.timer_label = tk.Label(footer, bg=theme.BG_TERTIARY, fg=theme.TEXT_MUTED,
+                                    font=theme.FONT_BUTTON, padx=10, width=8)
+        self.timer_label.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+        self.clear_button = theme.FlatButton(footer, text="Clear", variant="secondary", pady=8,
+                                             command=self.clear_presence)
+        self.clear_button.grid(row=0, column=2, sticky="ns", padx=(8, 0))
+        self.disconnect_button = theme.FlatButton(footer, text="Disconnect", variant="danger", pady=8,
+                                                  command=self.disconnect_discord)
+        self.disconnect_button.grid(row=0, column=3, sticky="ns", padx=(8, 0))
+
+    def set_connected(self, connected):
+        """Reflect the Discord connection state across the UI."""
+        self.connected = connected
+        state = tk.NORMAL if connected else tk.DISABLED
+        self.clear_button.config(state=state)
+        self.disconnect_button.config(state=state)
+        if connected:
+            self.avatar.itemconfig(self.status_dot, fill=theme.GREEN)
+            self.connection_status.config(text="Connected", fg=theme.GREEN)
+            self.primary_button.config(text="Update Presence", variant="primary",
+                                       command=self.update_presence)
+        else:
+            self.avatar.itemconfig(self.status_dot, fill=theme.OFFLINE)
+            self.connection_status.config(text="Disconnected", fg=theme.TEXT_MUTED)
+            self.primary_button.config(text="Connect to Discord", variant="success",
+                                       command=self.connect_discord)
+
+    def select_db_source(self, source):
+        """Handle a click on the database source segmented control."""
+        if self.db_source_var.get() != source:
+            self.db_source_var.set(source)
+            self.on_db_source_change()
+
+    def refresh_source_buttons(self, *_):
+        """Highlight the active database source."""
+        for value, button in self.source_buttons.items():
+            button.config(variant="tab_active" if value == self.db_source_var.get() else "tab")
+
+    def elapsed_text(self):
+        """Elapsed time of the current presence as h:mm:ss / m:ss."""
+        seconds = int(time.time()) - self.start_time if (self.connected and self.start_time) else 0
+        hours, rest = divmod(max(seconds, 0), 3600)
+        minutes, seconds = divmod(rest, 60)
+        return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes}:{seconds:02}"
+
+    def update_preview(self, *_):
+        """Refresh the 'Playing' preview card from the current inputs."""
+        title = self.game_combo.get().strip()
+        words = [w for w in title.split() if w[0].isalnum()]
+        initials = "".join(w[0] for w in words[:2]).upper() or "?"
+        self.preview_art.itemconfig(self.preview_initials, text=initials)
+        self.preview_title.config(text=theme.ellipsize(title or "No game selected", 32))
+
+        for label, entry in ((self.preview_details, self.details_entry),
+                             (self.preview_state, self.state_entry)):
+            value = entry.get().strip()
+            label.config(text=theme.ellipsize(value, 40))
+            if value:
+                label.grid()
+            else:
+                label.grid_remove()
+
+        has_small = bool(getattr(self, "small_image_entry", None) and self.small_image_entry.get().strip())
+        self.preview_art.itemconfig(self.preview_small, state="normal" if has_small else "hidden")
+
+        if self.show_time_var.get():
+            self.preview_timer.config(text=f"▶ {self.elapsed_text()}")
+            self.preview_timer.grid()
+        else:
+            self.preview_timer.grid_remove()
+
+    def tick(self):
+        """Once-a-second refresh of timers."""
+        self.update_preview()
+        running = self.connected and self.start_time
+        self.timer_label.config(text=self.elapsed_text(),
+                                fg=theme.TEXT if running else theme.TEXT_MUTED)
+        self.root.after(1000, self.tick)
+
     def log_message(self, message):
         """Add a message to the activity log."""
+        if message.startswith("ERROR"):
+            tag = "error"
+        elif message.startswith("WARNING"):
+            tag = "warning"
+        else:
+            tag = ()
         self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] {message}\n")
+        self.log_text.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] ", "time")
+        self.log_text.insert(tk.END, f"{message}\n", tag)
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
-    
+
     def connect_discord(self):
         """Connect to Discord Rich Presence."""
         # Get client ID from entry if not loaded from config
@@ -329,11 +524,7 @@ class DiscordRPCApp:
         self.rpc = DiscordRPC(self.client_id)
         
         if self.rpc.connect():
-            self.connection_status.config(text="Status: Connected", foreground="green")
-            self.connect_button.config(state=tk.DISABLED)
-            self.disconnect_button.config(state=tk.NORMAL)
-            self.update_button.config(state=tk.NORMAL)
-            self.clear_button.config(state=tk.NORMAL)
+            self.set_connected(True)
             self.log_message("Successfully connected to Discord")
         else:
             messagebox.showerror("Connection Error", 
@@ -345,11 +536,7 @@ class DiscordRPCApp:
         """Disconnect from Discord Rich Presence."""
         if self.rpc:
             self.rpc.disconnect()
-            self.connection_status.config(text="Status: Not Connected", foreground="red")
-            self.connect_button.config(state=tk.NORMAL)
-            self.disconnect_button.config(state=tk.DISABLED)
-            self.update_button.config(state=tk.DISABLED)
-            self.clear_button.config(state=tk.DISABLED)
+            self.set_connected(False)
             self.log_message("Disconnected from Discord")
     
     def reload_database(self):
@@ -550,9 +737,20 @@ class DiscordRPCApp:
         help_window = tk.Toplevel(self.root)
         help_window.title("Google Sheets Setup Instructions")
         help_window.geometry("600x500")
-        
-        text = scrolledtext.ScrolledText(help_window, wrap=tk.WORD, padx=10, pady=10)
-        text.pack(fill=tk.BOTH, expand=True)
+        help_window.configure(bg=theme.BG)
+        theme.apply_dark_title_bar(help_window)
+
+        close_button = theme.FlatButton(help_window, text="Close", command=help_window.destroy)
+        close_button.pack(side=tk.BOTTOM, anchor=tk.E, padx=16, pady=12)
+
+        text = tk.Text(help_window, wrap=tk.WORD, padx=16, pady=12, bg=theme.BG_TERTIARY,
+                       fg=theme.TEXT, font=theme.FONT_BODY, relief="flat", bd=0,
+                       highlightthickness=0, selectbackground=theme.BLURPLE)
+        scrollbar = ttk.Scrollbar(help_window, orient="vertical", style="Dark.Vertical.TScrollbar",
+                                  command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=(16, 0), padx=(0, 8))
+        text.pack(fill=tk.BOTH, expand=True, padx=(16, 0), pady=(16, 0))
         
         instructions = """Google Sheets API Setup Instructions
 
@@ -600,9 +798,6 @@ That's it! Click "Load" to import your games from Google Sheets.
         
         text.insert(tk.END, instructions)
         text.config(state=tk.DISABLED)
-        
-        close_button = ttk.Button(help_window, text="Close", command=help_window.destroy)
-        close_button.pack(pady=10)
     
     def on_game_selected(self, event):
         """Handle game selection from dropdown."""
@@ -708,6 +903,7 @@ def main():
     """Main entry point for the application."""
     root = tk.Tk()
     app = DiscordRPCApp(root)
+    theme.apply_dark_title_bar(root)
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
     root.mainloop()
 
