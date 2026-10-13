@@ -11,6 +11,7 @@ A Python application with a graphical user interface (GUI) that allows you to di
 - ⏱️ **Elapsed Time**: Optional elapsed time display
 - 📝 **Customizable**: Edit all presence fields directly in the UI
 - 💾 **Persistent Config**: Save your Discord Client ID in a config file
+- 📊 **Playtime Stats**: Sessions are logged automatically; the Stats tab shows playtime trends, top games and recent sessions
 
 ## Screenshots
 
@@ -280,6 +281,51 @@ CREDENTIALS_PATH = credentials.json
 **"API not enabled"**
 - Make sure both Google Sheets API and Google Drive API are enabled in Google Cloud Console
 
+## Playtime Stats
+
+Every time you update your presence, the app starts logging a play session for that game. The session ends when you switch games, clear your presence, disconnect, close the app, or step away from the PC for longer than `IDLE_MINUTES` (it resumes automatically when you come back).
+
+Open the **Stats** tab to see total playtime, session counts, a playtime chart, your top games and your recent sessions, for the last 7 days, the last 30 days, this month or all time.
+
+**Your history stays private.** It is stored on your machine in your user data folder, not in the project folder, so it can't be committed by accident:
+
+- Windows: `%APPDATA%\JustAnotherDiscordRichPresenceApp\sessions.db`
+- macOS: `~/Library/Application Support/JustAnotherDiscordRichPresenceApp/sessions.db`
+- Linux: `~/.local/share/JustAnotherDiscordRichPresenceApp/sessions.db`
+
+Set the `JADRPA_DATA_DIR` environment variable to use a different folder.
+
+### How the data flows
+
+```
+session_log.py   raw events (start / stop / heartbeat), append-only
+      |
+pipeline.py      events -> sessions -> daily_playtime  (rebuilt each run)
+      |
+stats.py         period summaries for the Stats tab
+```
+
+The pipeline cleans up the raw events:
+- A crash or forced close ends the session at the last heartbeat (written once a minute).
+- A gap in heartbeats longer than 3 minutes (PC asleep, app frozen) isn't counted as playtime.
+- Sessions shorter than a minute are dropped as mis-clicks.
+- Sessions that run past midnight are split across both days.
+
+You can also run it from the command line:
+
+```bash
+python pipeline.py                 # rebuild and print a summary
+python pipeline.py --csv export/   # also export sessions and daily totals as CSV
+```
+
+To try the dashboard with fake data:
+
+```bash
+python tools/generate_sample_sessions.py      # writes sample_data/sessions.db
+set JADRPA_DATA_DIR=sample_data               # Windows cmd (PowerShell: $env:JADRPA_DATA_DIR="sample_data")
+python main.py
+```
+
 ## File Structure
 
 ```
@@ -287,6 +333,10 @@ JustAnotherDiscordRichPresenceApp/
 ├── main.py                 # Main GUI application
 ├── discord_rpc.py          # Discord Rich Presence handler
 ├── database.py             # Game database reader (local & Google Sheets)
+├── session_log.py          # Logs play sessions to SQLite in your user data folder
+├── pipeline.py             # Turns raw session events into sessions and daily totals
+├── stats.py                # Stats queries for the Stats tab
+├── tests/                  # Unit tests for the session pipeline
 ├── games_database.xlsx     # Local game information database
 ├── credentials.json        # Google Service Account credentials (you provide)
 ├── config.ini              # Configuration file (create from .example)
@@ -321,6 +371,11 @@ SHEET_URL =
 
 # Path to Google Service Account credentials
 CREDENTIALS_PATH = credentials.json
+
+[Stats]
+# End a play session after this many minutes without keyboard/mouse input
+# (it resumes when you come back). 0 disables idle detection.
+IDLE_MINUTES = 15
 ```
 
 ## Troubleshooting
@@ -352,6 +407,12 @@ CREDENTIALS_PATH = credentials.json
 ## Development
 
 ### Running Tests
+
+Run the unit tests:
+
+```bash
+python -m unittest discover tests
+```
 
 Test individual modules:
 

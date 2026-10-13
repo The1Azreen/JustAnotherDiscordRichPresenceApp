@@ -7,11 +7,15 @@ import configparser
 import os
 from database import GameDatabase
 from discord_rpc import DiscordRPC
+from session_log import SessionLogger, HEARTBEAT_SECONDS
+import pipeline
+import stats
 import theme
 import time
+from datetime import datetime
 
 
-TAB_NAMES = ("Presence", "Images", "Settings", "Log")
+TAB_NAMES = ("Presence", "Images", "Stats", "Settings", "Log")
 
 
 class DiscordRPCApp:
@@ -34,9 +38,15 @@ class DiscordRPCApp:
         self.use_google_sheets = False
         self.google_sheet_url = ""
         self.credentials_path = ""
+        self.idle_minutes = 15
+        self.current_tab = None
+        self.stats_period = "This month"
         
         # Load configuration
         self.load_config()
+
+        # Play sessions are logged to the user's app-data folder, not the repo
+        self.session_logger = SessionLogger(idle_minutes=self.idle_minutes)
         
         # Initialize database based on config
         self.init_database()
@@ -76,6 +86,10 @@ class DiscordRPCApp:
             self.auto_connect = config.getboolean('Settings', 'AUTO_CONNECT')
         except:
             self.auto_connect = False
+        try:
+            self.idle_minutes = config.getint('Stats', 'IDLE_MINUTES', fallback=15)
+        except ValueError:
+            self.idle_minutes = 15
         
         # Load Google Sheets settings
         try:
@@ -121,6 +135,7 @@ class DiscordRPCApp:
         self.tabs = {}
         self.build_presence_tab()
         self.build_images_tab()
+        self.build_stats_tab()
         self.build_settings_tab()
         self.build_log_tab()
 
@@ -129,6 +144,7 @@ class DiscordRPCApp:
         self.show_tab("Presence")
         self.set_connected(False)
         self.tick()
+        self.root.after(HEARTBEAT_SECONDS * 1000, self.session_heartbeat)
 
         # Initial log message
         self.log_message("Application started. Please connect to Discord.")
@@ -169,16 +185,19 @@ class DiscordRPCApp:
         self.tab_buttons = {}
         for i, name in enumerate(TAB_NAMES):
             bar.columnconfigure(i, weight=1, uniform="tabs")
-            button = theme.FlatButton(bar, text=name, variant="tab", font=theme.FONT_BUTTON,
+            button = theme.FlatButton(bar, text=name, variant="tab", font=theme.FONT_BUTTON, padx=8,
                                       command=lambda n=name: self.show_tab(n))
             button.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 6, 0), pady=(0, 12))
             self.tab_buttons[name] = button
 
     def show_tab(self, name):
         """Raise the given tab and highlight its button."""
+        self.current_tab = name
         self.tabs[name].tkraise()
         for tab_name, button in self.tab_buttons.items():
             button.config(variant="tab_active" if tab_name == name else "tab")
+        if name == "Stats":
+            self.refresh_stats()
 
     def add_tab(self, name):
         """Create a scrollable tab page and return a Form to fill it."""
@@ -301,6 +320,223 @@ class DiscordRPCApp:
                                                 "Shown as a badge in the corner of the large image.")
         self.small_text_entry = self.add_field(form, "Small image text",
                                                "Shown when hovering over the small image.")
+
+    def build_stats_tab(self):
+        """Playtime dashboard built from the logged sessions."""
+        form = self.add_tab("Stats")
+
+        segment = tk.Frame(form.body, bg=theme.BG)
+        self.period_buttons = {}
+        for i, period in enumerate(stats.PERIODS):
+            segment.columnconfigure(i, weight=1, uniform="period")
+            button = theme.FlatButton(segment, text=period, variant="tab", font=theme.FONT_BUTTON, padx=6,
+                                      command=lambda p=period: self.select_stats_period(p))
+            button.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 6, 0))
+            self.period_buttons[period] = button
+        form.add(segment, pady=(0, 20))
+
+        self.stats_headline = tk.Label(form.body, bg=theme.BG, fg=theme.TEXT_STRONG, anchor="w",
+                                       justify="left", font=theme.FONT_BODY_LARGE, wraplength=470)
+        form.add(self.stats_headline, pady=(0, 16))
+
+        tiles = tk.Frame(form.body, bg=theme.BG)
+        self.stat_values = {}
+        for i, name in enumerate(("Total", "Sessions", "Avg session")):
+            tiles.columnconfigure(i, weight=1, uniform="tiles")
+            tile = tk.Frame(tiles, bg=theme.CARD, padx=12, pady=10)
+            tile.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
+            theme.section_label(tile, name, bg=theme.CARD).pack(anchor="w")
+            value = tk.Label(tile, bg=theme.CARD, fg=theme.TEXT_STRONG, font=theme.FONT_TITLE, anchor="w")
+            value.pack(anchor="w", pady=(8, 0))
+            self.stat_values[name] = value
+        form.add(tiles, pady=(0, 24))
+
+        self.chart_title = theme.section_label(form.body, "Playtime per day")
+        form.add(self.chart_title, pady=(0, 8))
+        self.chart = tk.Canvas(form.body, height=170, bg=theme.BG, highlightthickness=0)
+        form.add(self.chart, pady=(0, 24))
+        self.chart_buckets = []
+        self.chart_geometry = None
+        self.chart.bind("<Configure>", lambda e: self.draw_chart())
+        self.chart.bind("<Motion>", self.on_chart_hover)
+        self.chart.bind("<Leave>", lambda e: self.draw_chart())
+
+        form.add(theme.section_label(form.body, "Top games"), pady=(0, 8))
+        self.top_games_frame = tk.Frame(form.body, bg=theme.BG)
+        self.top_games_frame.columnconfigure(0, weight=1)
+        form.add(self.top_games_frame, pady=(0, 24))
+
+        form.add(theme.section_label(form.body, "Recent sessions"), pady=(0, 8))
+        self.recent_frame = tk.Frame(form.body, bg=theme.BG)
+        self.recent_frame.columnconfigure(0, weight=1)
+        form.add(self.recent_frame, pady=(0, 20))
+
+        form.add(theme.divider(form.body), pady=(0, 16))
+        idle = (f"pause after {self.idle_minutes} minutes without keyboard or mouse input"
+                if self.idle_minutes else "do not pause when idle")
+        form.add(theme.hint_label(form.body,
+                                  f"Sessions are logged automatically while your presence is set, and {idle}. "
+                                  f"Stored locally at {self.session_logger.db_path}"))
+        self.refresh_period_buttons()
+
+    def select_stats_period(self, period):
+        self.stats_period = period
+        self.refresh_period_buttons()
+        self.refresh_stats()
+
+    def refresh_period_buttons(self):
+        for period, button in self.period_buttons.items():
+            button.config(variant="tab_active" if period == self.stats_period else "tab")
+
+    def session_heartbeat(self):
+        """Once a minute: keep the session log alive and the Stats tab fresh."""
+        was_active = self.session_logger.active
+        self.session_logger.heartbeat()
+        if was_active and not self.session_logger.active:
+            self.log_message(f"Session paused: idle for {self.idle_minutes}+ minutes")
+        elif not was_active and self.session_logger.active:
+            self.log_message("Session resumed")
+        if self.current_tab == "Stats":
+            self.refresh_stats()
+        self.root.after(HEARTBEAT_SECONDS * 1000, self.session_heartbeat)
+
+    def refresh_stats(self):
+        """Rebuild the derived tables and redraw the Stats tab."""
+        try:
+            pipeline.run(self.session_logger.db_path, current_run=self.session_logger.run_id)
+            summary = stats.summarize(self.stats_period, self.session_logger.db_path)
+        except Exception as e:
+            self.log_message(f"ERROR: Failed to load stats - {e}")
+            return
+
+        self.stats_headline.config(text=summary["headline"] or
+                                   "No sessions yet. Set your presence for a game and your playtime "
+                                   "will show up here.")
+        self.stat_values["Total"].config(text=stats.format_duration(summary["total"]))
+        self.stat_values["Sessions"].config(text=str(summary["session_count"]))
+        self.stat_values["Avg session"].config(text=stats.format_duration(summary["avg_session"]))
+
+        self.chart_title.config(text="PLAYTIME PER MONTH" if self.stats_period == "All time"
+                                else "PLAYTIME PER DAY")
+        self.chart_buckets = summary["buckets"]
+        self.draw_chart()
+        self.fill_top_games(summary["top_games"][:5])
+        self.fill_recent(summary["recent"])
+
+    def draw_chart(self, hover=None):
+        """Column chart of playtime per bucket, drawn on a canvas."""
+        c = self.chart
+        c.delete("all")
+        width, height = c.winfo_width(), int(c.cget("height"))
+        buckets = self.chart_buckets
+        if width < 50 or not buckets or not any(s for _, s, _ in buckets):
+            self.chart_geometry = None
+            c.create_text(width / 2, height / 2, text="Nothing to chart yet", fill=theme.TEXT_MUTED,
+                          font=theme.FONT_SMALL)
+            return
+
+        left, top, bottom = 34, 18, height - 22
+        peak_hours = max(s for _, s, _ in buckets) / 3600
+        step = next((n for n in (0.5, 1, 2, 4, 5, 10, 20, 25, 50, 100) if peak_hours / n <= 3), 200)
+        ticks = max(1, -int(-peak_hours // step))
+        scale_max = ticks * step * 3600
+
+        # Recessive hairline grid with hour labels
+        for i in range(ticks + 1):
+            y = bottom - (bottom - top) * i / ticks
+            c.create_line(left, y, width, y, fill=theme.DIVIDER)
+            c.create_text(left - 6, y, text=f"{step * i:g}h", anchor="e", fill=theme.TEXT_MUTED,
+                          font=theme.FONT_SMALL)
+
+        n = len(buckets)
+        slot = (width - left) / n
+        bar = max(2, min(24, slot - 2))
+        label_every = 1 if n <= 12 else 5
+        peak_index = max(range(n), key=lambda i: buckets[i][1])
+        self.chart_geometry = (left, slot)
+        for i, (axis_label, seconds, _) in enumerate(buckets):
+            cx = left + slot * i + slot / 2
+            x1, x2 = cx - bar / 2, cx + bar / 2
+            if seconds > 0:
+                # Rounded data-end, square at the baseline
+                y = bottom - (bottom - top) * seconds / scale_max
+                fill = theme.BLURPLE_HOVER if i == hover else theme.BLURPLE
+                radius = min(4, bar / 2)
+                if bottom - y > radius * 2:
+                    theme.round_rect(c, x1, y, x2, bottom, radius, fill=fill)
+                    c.create_rectangle(x1, y + radius, x2, bottom, fill=fill, outline="")
+                else:
+                    c.create_rectangle(x1, min(y, bottom - 1), x2, bottom, fill=fill, outline="")
+                if i == peak_index and hover is None:
+                    c.create_text(cx, y - 4, text=stats.format_duration(seconds), anchor="s",
+                                  fill=theme.TEXT, font=theme.FONT_SMALL)
+            if i % label_every == 0 or (i == n - 1 and (n - 1) % label_every >= 3):
+                c.create_text(cx, bottom + 4, text=axis_label, anchor="n", fill=theme.TEXT_MUTED,
+                              font=theme.FONT_SMALL)
+
+        if hover is not None:
+            _, seconds, tooltip = buckets[hover]
+            text = f"{tooltip}  {stats.format_duration(seconds) if seconds else 'no play'}"
+            cx = left + slot * hover + slot / 2
+            item = c.create_text(0, 0, text=text, anchor="n", fill=theme.TEXT_STRONG, font=theme.FONT_BODY)
+            x1, _, x2, _ = c.bbox(item)
+            half = (x2 - x1) / 2
+            c.coords(item, min(max(cx, left + half + 8), width - half - 8), 0)
+            x1, y1, x2, y2 = c.bbox(item)
+            box = c.create_rectangle(x1 - 8, y1, x2 + 8, y2, fill=theme.BG_TERTIARY, outline="")
+            c.tag_raise(item, box)
+
+    def on_chart_hover(self, event):
+        if not self.chart_geometry:
+            return
+        left, slot = self.chart_geometry
+        index = int((event.x - left) // slot)
+        self.draw_chart(hover=index if 0 <= index < len(self.chart_buckets) else None)
+
+    def fill_top_games(self, games):
+        """Ranked list of the most played games with proportional bars."""
+        for child in self.top_games_frame.winfo_children():
+            child.destroy()
+        if not games:
+            theme.hint_label(self.top_games_frame, "No games played in this period.").grid(sticky="w")
+            return
+        peak = games[0][2] or 1
+        for row, (game, console, seconds) in enumerate(games):
+            name = theme.ellipsize(game, 30) + (f"  ·  {console}" if console else "")
+            tk.Label(self.top_games_frame, text=name, bg=theme.BG, fg=theme.TEXT, anchor="w",
+                     font=theme.FONT_BODY).grid(row=row * 2, column=0, sticky="w")
+            tk.Label(self.top_games_frame, text=stats.format_duration(seconds), bg=theme.BG,
+                     fg=theme.TEXT_STRONG, font=theme.FONT_BODY).grid(row=row * 2, column=1, sticky="e")
+            track = tk.Canvas(self.top_games_frame, height=6, bg=theme.BG, highlightthickness=0)
+            track.grid(row=row * 2 + 1, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+            track.bind("<Configure>", lambda e, t=track, f=seconds / peak: self.draw_track(t, f))
+
+    @staticmethod
+    def draw_track(canvas, fraction):
+        canvas.delete("all")
+        width = canvas.winfo_width()
+        theme.round_rect(canvas, 0, 0, width, 6, 3, fill=theme.BG_TERTIARY)
+        theme.round_rect(canvas, 0, 0, max(6, width * fraction), 6, 3, fill=theme.BLURPLE)
+
+    def fill_recent(self, sessions):
+        """Latest sessions in this period, newest first."""
+        for child in self.recent_frame.winfo_children():
+            child.destroy()
+        if not sessions:
+            theme.hint_label(self.recent_frame, "No sessions in this period.").grid(sticky="w")
+            return
+        for row, (start, _end, seconds, game, console, is_open) in enumerate(sessions):
+            card = tk.Frame(self.recent_frame, bg=theme.CARD, padx=12, pady=6)
+            card.grid(row=row, column=0, sticky="ew", pady=(0, 6))
+            card.columnconfigure(0, weight=1)
+            tk.Label(card, text=theme.ellipsize(game, 34), bg=theme.CARD, fg=theme.TEXT_STRONG,
+                     anchor="w", font=theme.FONT_BODY).grid(row=0, column=0, sticky="w")
+            when = datetime.fromtimestamp(start).strftime("%a %d %b, %H:%M")
+            tk.Label(card, text=when + (f"  ·  {console}" if console else ""), bg=theme.CARD,
+                     fg=theme.TEXT_MUTED, anchor="w", font=theme.FONT_SMALL).grid(row=1, column=0, sticky="w")
+            duration = stats.format_duration(seconds) + ("  ● now" if is_open else "")
+            tk.Label(card, text=duration, bg=theme.CARD, fg=theme.GREEN if is_open else theme.TEXT,
+                     font=theme.FONT_BODY).grid(row=0, column=1, rowspan=2, sticky="e")
 
     def build_settings_tab(self):
         """Client ID and database source settings."""
@@ -536,6 +772,7 @@ class DiscordRPCApp:
         """Disconnect from Discord Rich Presence."""
         if self.rpc:
             self.rpc.disconnect()
+            self.session_logger.stop("disconnect")
             self.set_connected(False)
             self.log_message("Disconnected from Discord")
     
@@ -873,6 +1110,8 @@ That's it! Click "Load" to import your games from Google Sheets.
         )
         
         if success:
+            game = (self.game_combo.get().strip() or large_text or details)
+            self.session_logger.start(game, self.console_combo.get().strip() or None)
             self.log_message("Presence updated successfully")
             messagebox.showinfo("Success", "Discord Rich Presence updated!")
         else:
@@ -886,6 +1125,7 @@ That's it! Click "Load" to import your games from Google Sheets.
             return
         
         if self.rpc.clear_presence():
+            self.session_logger.stop("clear")
             self.start_time = None
             self.log_message("Presence cleared")
             messagebox.showinfo("Success", "Discord Rich Presence cleared!")
@@ -894,6 +1134,7 @@ That's it! Click "Load" to import your games from Google Sheets.
     
     def on_closing(self):
         """Handle application closing."""
+        self.session_logger.stop("exit")
         if self.rpc and self.rpc.is_connected():
             self.rpc.disconnect()
         self.root.destroy()

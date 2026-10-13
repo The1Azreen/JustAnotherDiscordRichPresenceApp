@@ -20,3 +20,9 @@ SHEET_URL =
 # Path to Google Service Account credentials JSON file
 # Leave empty to use default service account discovery
 CREDENTIALS_PATH = credentials.json
+
+[Stats]
+# End a play session after this many minutes without keyboard/mouse input
+# (it resumes when you come back). 0 disables idle detection.
+IDLE_MINUTES = 15
+

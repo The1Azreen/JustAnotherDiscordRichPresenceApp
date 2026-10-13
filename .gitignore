@@ -51,6 +51,11 @@ data/*.csv
 data/**/*.csv
 
 
+# Play history (lives in %APPDATA%, never the repo; this is a backstop)
+*.db
+*.sqlite
+sample_data/
+
 # OS
 .DS_Store
 Thumbs.db
