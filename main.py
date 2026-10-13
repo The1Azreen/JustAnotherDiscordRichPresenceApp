@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, filedialog
 import base64
 import configparser
 import os
+import sys
 import threading
 import urllib.request
 from database import GameDatabase
@@ -63,7 +64,7 @@ class DiscordRPCApp:
         self.create_widgets()
         
         # Auto-connect if enabled
-        if hasattr(self, 'auto_connect') and self.auto_connect:
+        if getattr(self, 'auto_connect', False) and self.client_id:
             self.root.after(1000, self.connect_discord)
     
     def load_config(self):
@@ -1341,7 +1342,14 @@ That's it! Click "Load" to import your games from Google Sheets.
 
 def main():
     """Main entry point for the application."""
+    if getattr(sys, "frozen", False):
+        # Packaged exe: look for config.ini and the database next to the exe,
+        # even when launched from a shortcut with another working directory
+        os.chdir(os.path.dirname(sys.executable))
     root = tk.Tk()
+    icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "app.ico")
+    if os.path.exists(icon):
+        root.iconbitmap(default=icon)
     app = DiscordRPCApp(root)
     theme.apply_dark_title_bar(root)
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
