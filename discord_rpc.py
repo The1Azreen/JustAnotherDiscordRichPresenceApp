@@ -2,8 +2,52 @@
 Discord Rich Presence integration module.
 """
 from pypresence import Presence
+from pypresence.exceptions import DiscordNotFound, InvalidPipe, ConnectionTimeout, InvalidID, DiscordError
+from pypresence.utils import get_ipc_path
+import asyncio
+import json
+import struct
+import sys
 import time
 import threading
+
+
+class _Presence(Presence):
+    """pypresence's Presence, but keeps the user from Discord's READY handshake.
+
+    Mirrors BaseClient.handshake from pypresence 4.3.0, which discards it.
+    """
+    user = None
+
+    async def handshake(self):
+        ipc_path = get_ipc_path(self.pipe)
+        if not ipc_path:
+            raise DiscordNotFound
+        try:
+            if sys.platform == 'win32':
+                self.sock_reader = asyncio.StreamReader(loop=self.loop)
+                reader_protocol = asyncio.StreamReaderProtocol(self.sock_reader, loop=self.loop)
+                self.sock_writer, _ = await asyncio.wait_for(
+                    self.loop.create_pipe_connection(lambda: reader_protocol, ipc_path), self.connection_timeout)
+            else:
+                self.sock_reader, self.sock_writer = await asyncio.wait_for(
+                    asyncio.open_unix_connection(ipc_path), self.connection_timeout)
+        except FileNotFoundError:
+            raise InvalidPipe
+        except asyncio.TimeoutError:
+            raise ConnectionTimeout
+
+        self.send_data(0, {'v': 1, 'client_id': self.client_id})
+        preamble = await self.sock_reader.read(8)
+        code, length = struct.unpack('<ii', preamble)
+        data = json.loads(await self.sock_reader.read(length))
+        if 'code' in data:
+            if data['message'] == 'Invalid Client ID':
+                raise InvalidID
+            raise DiscordError(data['code'], data['message'])
+        self.user = (data.get('data') or {}).get('user')
+        if self._events_on:
+            self.sock_reader.feed_data = self.on_event
 
 
 class DiscordRPC:
@@ -20,6 +64,7 @@ class DiscordRPC:
         self.rpc = None
         self.connected = False
         self.current_presence = {}
+        self.user = None  # dict with id, username, global_name, avatar once connected
         self._update_thread = None
         self._stop_update = False
     
@@ -35,8 +80,9 @@ class DiscordRPC:
                 print("Already connected to Discord")
                 return True
             
-            self.rpc = Presence(self.client_id)
+            self.rpc = _Presence(self.client_id)
             self.rpc.connect()
+            self.user = self.rpc.user
             self.connected = True
             print("Successfully connected to Discord RPC")
             return True
@@ -62,7 +108,7 @@ class DiscordRPC:
     
     def update_presence(self, details=None, state=None, large_image=None, 
                        large_text=None, small_image=None, small_text=None,
-                       start_timestamp=None):
+                       start_timestamp=None, party_size=None):
         """
         Update Discord Rich Presence.
         
@@ -74,6 +120,7 @@ class DiscordRPC:
             small_image: Asset name or URL for small image
             small_text: Hover text for small image
             start_timestamp: Unix timestamp for elapsed time
+            party_size: [current, max] shown as "(1 of 4)" after the state
         
         Returns:
             True if update successful, False otherwise
@@ -100,6 +147,8 @@ class DiscordRPC:
                 presence['small_text'] = str(small_text)
             if start_timestamp:
                 presence['start'] = int(start_timestamp)
+            if party_size:
+                presence['party_size'] = [int(n) for n in party_size]
             
             # Update presence
             self.rpc.update(**presence)

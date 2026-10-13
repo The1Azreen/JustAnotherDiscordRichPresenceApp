@@ -6,6 +6,9 @@ CLIENT_ID = YOUR_CLIENT_ID_HERE
 # Auto-connect on startup
 AUTO_CONNECT = True
 
+# Keep the elapsed timer running when you apply a different game
+KEEP_TIMER_ON_SWITCH = False
+
 # Default update interval (seconds)
 UPDATE_INTERVAL = 15
 

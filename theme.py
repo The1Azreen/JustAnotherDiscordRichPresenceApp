@@ -69,6 +69,8 @@ BUTTON_VARIANTS = {
     "ghost": (BG_SECONDARY, BG_HOVER, TEXT_MUTED),
     "tab": ("#383A40", "#404249", TEXT_MUTED),
     "tab_active": ("#4E5058", "#4E5058", TEXT_STRONG),
+    "icon": (BG_TERTIARY, BG_HOVER, TEXT_MUTED),
+    "icon_active": (BG_TERTIARY, BG_HOVER, TEXT_STRONG),
 }
 
 

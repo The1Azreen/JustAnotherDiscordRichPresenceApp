@@ -9,6 +9,8 @@ A Python application with a graphical user interface (GUI) that allows you to di
 - 🖥️ **User-Friendly GUI**: Easy-to-use interface built with tkinter
 - 🔄 **Real-Time Updates**: Change your Discord status instantly
 - ⏱️ **Elapsed Time**: Optional elapsed time display
+- 👥 **Party Size**: Show "(1 of 4)" next to your status
+- 🔍 **Game Search**: Type to filter your game list, or enter any name
 - 📝 **Customizable**: Edit all presence fields directly in the UI
 - 💾 **Persistent Config**: Save your Discord Client ID in a config file
 - 📊 **Playtime Stats**: Sessions are logged automatically; the Stats tab shows playtime trends, top games and recent sessions
@@ -358,6 +360,9 @@ CLIENT_ID = YOUR_CLIENT_ID_HERE
 [Settings]
 # Automatically connect to Discord on startup
 AUTO_CONNECT = True
+
+# Keep the elapsed timer running when you apply a different game
+KEEP_TIMER_ON_SWITCH = False
 
 # Update interval in seconds (future feature)
 UPDATE_INTERVAL = 15

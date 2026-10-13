@@ -3,8 +3,11 @@ Main GUI application for Discord Rich Presence Game Selector.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import base64
 import configparser
 import os
+import threading
+import urllib.request
 from database import GameDatabase
 from discord_rpc import DiscordRPC
 from session_log import SessionLogger, HEARTBEAT_SECONDS
@@ -39,7 +42,12 @@ class DiscordRPCApp:
         self.google_sheet_url = ""
         self.credentials_path = ""
         self.idle_minutes = 15
+        self.keep_timer = False
         self.current_tab = None
+        self.game_titles = []      # all titles for the selected console
+        self.loaded_game = None    # database row of the selected game
+        self.applied = None        # snapshot of the fields last sent to Discord
+        self.reset_buttons = []    # (entry, database column, button)
         self.stats_period = "This month"
         
         # Load configuration
@@ -86,6 +94,10 @@ class DiscordRPCApp:
             self.auto_connect = config.getboolean('Settings', 'AUTO_CONNECT')
         except:
             self.auto_connect = False
+        try:
+            self.keep_timer = config.getboolean('Settings', 'KEEP_TIMER_ON_SWITCH', fallback=False)
+        except ValueError:
+            self.keep_timer = False
         try:
             self.idle_minutes = config.getint('Stats', 'IDLE_MINUTES', fallback=15)
         except ValueError:
@@ -159,14 +171,13 @@ class DiscordRPCApp:
 
         self.avatar = tk.Canvas(header, width=42, height=42, bg=theme.BG_SECONDARY,
                                 highlightthickness=0)
-        self.avatar.create_oval(1, 1, 37, 37, fill=theme.BLURPLE, outline="")
-        self.avatar.create_text(22, 21, text="▶", fill="#FFFFFF", font=theme.FONT_TITLE)
-        self.status_dot = self.avatar.create_oval(26, 26, 41, 41, fill=theme.OFFLINE,
-                                                  outline=theme.BG_SECONDARY, width=3)
+        self.avatar_photo = None
+        self.draw_avatar()
         self.avatar.grid(row=0, column=0, rowspan=2, padx=(0, 10))
 
-        tk.Label(header, text="Rich Presence Manager", bg=theme.BG_SECONDARY,
-                 fg=theme.TEXT_STRONG, font=theme.FONT_TITLE).grid(row=0, column=1, sticky="sw")
+        self.header_title = tk.Label(header, text="Rich Presence Manager", bg=theme.BG_SECONDARY,
+                                     fg=theme.TEXT_STRONG, font=theme.FONT_TITLE)
+        self.header_title.grid(row=0, column=1, sticky="sw")
         self.connection_status = tk.Label(header, text="Disconnected", bg=theme.BG_SECONDARY,
                                           fg=theme.TEXT_MUTED, font=theme.FONT_SMALL)
         self.connection_status.grid(row=1, column=1, sticky="nw")
@@ -177,6 +188,53 @@ class DiscordRPCApp:
         theme.FlatButton(header, text="⚙", variant="ghost", padx=8, pady=2,
                          font=(theme.SYMBOL, 14),
                          command=lambda: self.show_tab("Settings")).grid(row=0, column=3, rowspan=2, padx=(4, 0))
+
+    def draw_avatar(self, initial=None):
+        """Round avatar with a status dot: the Discord user's picture once known."""
+        c = self.avatar
+        c.delete("all")
+        if self.avatar_photo:
+            c.create_image(19, 19, image=self.avatar_photo)
+            # Mask the square corners with a ring in the header colour
+            c.create_oval(-1.5, -1.5, 39.5, 39.5, outline=theme.BG_SECONDARY, width=7)
+        else:
+            c.create_oval(3, 3, 35, 35, fill=theme.BLURPLE, outline="")
+            c.create_text(19, 19, text=initial or "▶", fill="#FFFFFF", font=theme.FONT_TITLE)
+        self.status_dot = c.create_oval(26, 26, 41, 41, outline=theme.BG_SECONDARY, width=3,
+                                        fill=theme.GREEN if self.connected else theme.OFFLINE)
+
+    def show_discord_user(self, user):
+        """Show the connected Discord account in the header, like the Discord client."""
+        self.avatar_photo = None
+        if not user:
+            self.header_title.config(text="Rich Presence Manager")
+            self.draw_avatar()
+            return
+        name = user.get("global_name") or user.get("username") or "Discord user"
+        self.header_title.config(text=theme.ellipsize(name, 20))
+        self.draw_avatar(initial=name[:1].upper())
+        if user.get("avatar") and user.get("id"):
+            url = f"https://cdn.discordapp.com/avatars/{user['id']}/{user['avatar']}.png?size=32"
+            threading.Thread(target=self.fetch_avatar, args=(url,), daemon=True).start()
+
+    def fetch_avatar(self, url):
+        """Download the avatar off the UI thread, then hand it back to Tk."""
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                data = base64.b64encode(response.read())
+        except Exception as e:
+            print(f"Could not load Discord avatar: {e}")
+            return
+        self.root.after(0, self.set_avatar, data)
+
+    def set_avatar(self, data):
+        if not self.connected:
+            return
+        try:
+            self.avatar_photo = tk.PhotoImage(data=data)
+        except tk.TclError:
+            return
+        self.draw_avatar()
 
     def build_tab_bar(self):
         """Segmented tab buttons under the header."""
@@ -207,18 +265,41 @@ class DiscordRPCApp:
         self.tabs[name] = page
         return theme.Form(page.inner)
 
-    def add_field(self, form, label, hint=None, live_preview=True):
-        """Add a labelled text input to a form and return the entry."""
+    def add_field(self, form, label, hint=None, live_preview=True, reset_key=None):
+        """Add a labelled text input to a form and return the entry.
+
+        With reset_key, a button beside the input restores the value from the
+        game database after it has been edited.
+        """
         var = tk.StringVar()
         self.field_vars.append(var)
         if live_preview:
             var.trace_add("write", self.update_preview)
         form.add(theme.section_label(form.body, label), pady=(0, 6))
-        box, entry = theme.make_entry(form.body, textvariable=var)
-        form.add(box, pady=(0, 0 if hint else 16))
+        row = tk.Frame(form.body, bg=theme.BG)
+        row.columnconfigure(0, weight=1)
+        box, entry = theme.make_entry(row, textvariable=var)
+        box.grid(row=0, column=0, sticky="ew")
+        if reset_key:
+            button = self.icon_button(row, "⟲", command=lambda: self.reset_field(entry, reset_key))
+            button.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+            self.reset_buttons.append((entry, reset_key, button))
+        form.add(row, pady=(0, 0 if hint else 16))
         if hint:
             form.add(theme.hint_label(form.body, hint), pady=(6, 16))
         return entry
+
+    @staticmethod
+    def icon_button(parent, glyph, command=None, variant="icon"):
+        """Small square button holding a single symbol."""
+        return theme.FlatButton(parent, text=glyph, variant=variant, padx=10, pady=0,
+                                font=(theme.SYMBOL, 11), command=command)
+
+    def reset_field(self, entry, key):
+        """Restore a field to the value stored in the game database."""
+        if self.loaded_game:
+            entry.delete(0, tk.END)
+            entry.insert(0, self.loaded_game.get(key, ''))
 
     def build_presence_tab(self):
         """Game picker, presence text and a live Discord-style preview."""
@@ -239,10 +320,17 @@ class DiscordRPCApp:
         except Exception:
             self.console_combo['values'] = []
 
-        # Game dropdown
+        # Game box: pick from the list, or type to filter it
         form.add(theme.section_label(form.body, "Game"), pady=(0, 6))
-        self.game_combo = ttk.Combobox(form.body, state='readonly', font=theme.FONT_BODY)
-        form.add(self.game_combo)
+        row = tk.Frame(form.body, bg=theme.BG)
+        row.columnconfigure(0, weight=1)
+        self.game_combo = ttk.Combobox(row, font=theme.FONT_BODY)
+        self.game_combo.grid(row=0, column=0, sticky="ew")
+        self.game_check = tk.Label(row, text="✔", bg=theme.BG, fg=theme.BG, font=(theme.SYMBOL, 12))
+        self.game_check.grid(row=0, column=1, padx=(8, 0))
+        form.add(row)
+        self.game_hint = theme.hint_label(form.body, "")
+        form.add(self.game_hint, pady=(6, 0))
         # Initialize games based on selected console
         initial_console = self.console_combo.get()
         try:
@@ -252,14 +340,35 @@ class DiscordRPCApp:
                 titles = self.db.get_all_game_titles()
         except Exception:
             titles = []
-        self.game_combo['values'] = titles
+        self.set_game_titles(titles)
         self.game_combo.bind('<<ComboboxSelected>>', self.on_game_selected)
-        self.game_combo.bind('<<ComboboxSelected>>', self.update_preview, add="+")
+        self.game_combo.bind('<KeyRelease>', self.on_game_typed)
+        self.game_combo.bind('<Return>', self.on_game_selected)
+        self.game_combo.bind('<FocusOut>', self.on_game_selected)
 
         form.add(theme.divider(form.body), pady=20)
 
-        self.details_entry = self.add_field(form, "Details", "The first line shown under the game name.")
-        self.state_entry = self.add_field(form, "State", "The second line, e.g. what you're doing in game.")
+        self.details_entry = self.add_field(form, "Details", "The first line shown under the game name.",
+                                            reset_key='Details')
+        self.state_entry = self.add_field(form, "State", "The second line, e.g. what you're doing in game.",
+                                          reset_key='State')
+
+        # Party size: "(1 of 4)" after the state line
+        form.add(theme.section_label(form.body, "Party size"), pady=(0, 6))
+        row = tk.Frame(form.body, bg=theme.BG)
+        self.party_vars = []
+        for i in range(2):
+            var = tk.StringVar()
+            var.trace_add("write", self.update_preview)
+            self.party_vars.append(var)
+            box, entry = theme.make_entry(row, textvariable=var)
+            entry.config(width=5, justify="center")
+            box.grid(row=0, column=i * 2)
+        tk.Label(row, text="of", bg=theme.BG, fg=theme.TEXT_MUTED, font=theme.FONT_BODY).grid(
+            row=0, column=1, padx=10)
+        form.add(row, sticky="w")
+        form.add(theme.hint_label(form.body, "Optional, e.g. 1 of 4. Leave empty to hide. Shown "
+                                             "after the state line."), pady=(6, 16))
 
         form.add(theme.divider(form.body), pady=(4, 20))
 
@@ -272,8 +381,8 @@ class DiscordRPCApp:
         self.show_time_var.trace_add("write", self.update_preview)
         theme.Toggle(row, variable=self.show_time_var).grid(row=0, column=1, sticky="e")
         form.add(row)
-        form.add(theme.hint_label(form.body, "Displays a timer that starts the first time you "
-                                             "update your presence."), pady=(6, 0))
+        form.add(theme.hint_label(form.body, "Displays a timer that starts when you apply your status. "
+                                             "Also toggled by the ⌛ button below."), pady=(6, 0))
 
     def build_preview_card(self, parent):
         """Card mimicking the 'Playing' activity on a Discord profile."""
@@ -312,14 +421,17 @@ class DiscordRPCApp:
                                   "Discord only shows images uploaded as Art Assets under Rich Presence "
                                   "in the Developer Portal. Enter the asset key (its name), not a URL."),
                  pady=(0, 20))
-        self.large_image_entry = self.add_field(form, "Large image (asset key)")
+        self.large_image_entry = self.add_field(form, "Large image (asset key)", reset_key='Large Image')
         self.large_text_entry = self.add_field(form, "Large image text",
-                                               "Shown when hovering over the large image.")
+                                               "Shown when hovering over the large image.",
+                                               reset_key='Large Image Text')
         form.add(theme.divider(form.body), pady=(4, 20))
         self.small_image_entry = self.add_field(form, "Small image (asset key)",
-                                                "Shown as a badge in the corner of the large image.")
+                                                "Shown as a badge in the corner of the large image.",
+                                                reset_key='Small Image')
         self.small_text_entry = self.add_field(form, "Small image text",
-                                               "Shown when hovering over the small image.")
+                                               "Shown when hovering over the small image.",
+                                               reset_key='Small Image Text')
 
     def build_stats_tab(self):
         """Playtime dashboard built from the logged sessions."""
@@ -550,6 +662,18 @@ class DiscordRPCApp:
 
         form.add(theme.divider(form.body), pady=(4, 20))
 
+        row = tk.Frame(form.body, bg=theme.BG)
+        row.columnconfigure(0, weight=1)
+        tk.Label(row, text="Keep timer when switching games", bg=theme.BG, fg=theme.TEXT_STRONG,
+                 font=theme.FONT_BODY).grid(row=0, column=0, sticky="w")
+        self.keep_timer_var = tk.BooleanVar(value=self.keep_timer)
+        theme.Toggle(row, variable=self.keep_timer_var).grid(row=0, column=1, sticky="e")
+        form.add(row)
+        form.add(theme.hint_label(form.body, "Your elapsed time won't reset when you apply a different game."),
+                 pady=(6, 0))
+
+        form.add(theme.divider(form.body), pady=20)
+
         # Database source segmented control
         form.add(theme.section_label(form.body, "Database source"), pady=(0, 6))
         self.db_source_var = tk.StringVar(value="Google Sheets" if self.use_google_sheets else "Local File")
@@ -652,15 +776,18 @@ class DiscordRPCApp:
 
         self.primary_button = theme.FlatButton(footer, pady=8)
         self.primary_button.grid(row=0, column=0, sticky="ew")
+        self.time_button = self.icon_button(footer, "⌛",
+                                            command=lambda: self.show_time_var.set(not self.show_time_var.get()))
+        self.time_button.grid(row=0, column=1, sticky="ns", padx=(8, 0))
         self.timer_label = tk.Label(footer, bg=theme.BG_TERTIARY, fg=theme.TEXT_MUTED,
                                     font=theme.FONT_BUTTON, padx=10, width=8)
-        self.timer_label.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+        self.timer_label.grid(row=0, column=2, sticky="ns", padx=(4, 0))
         self.clear_button = theme.FlatButton(footer, text="Clear", variant="secondary", pady=8,
                                              command=self.clear_presence)
-        self.clear_button.grid(row=0, column=2, sticky="ns", padx=(8, 0))
+        self.clear_button.grid(row=0, column=3, sticky="ns", padx=(8, 0))
         self.disconnect_button = theme.FlatButton(footer, text="Disconnect", variant="danger", pady=8,
                                                   command=self.disconnect_discord)
-        self.disconnect_button.grid(row=0, column=3, sticky="ns", padx=(8, 0))
+        self.disconnect_button.grid(row=0, column=4, sticky="ns", padx=(8, 0))
 
     def set_connected(self, connected):
         """Reflect the Discord connection state across the UI."""
@@ -668,16 +795,42 @@ class DiscordRPCApp:
         state = tk.NORMAL if connected else tk.DISABLED
         self.clear_button.config(state=state)
         self.disconnect_button.config(state=state)
+        if not connected:
+            self.applied = None
+        self.show_discord_user(self.rpc.user if (connected and self.rpc) else None)
         if connected:
-            self.avatar.itemconfig(self.status_dot, fill=theme.GREEN)
             self.connection_status.config(text="Connected", fg=theme.GREEN)
-            self.primary_button.config(text="Update Presence", variant="primary",
-                                       command=self.update_presence)
         else:
-            self.avatar.itemconfig(self.status_dot, fill=theme.OFFLINE)
             self.connection_status.config(text="Disconnected", fg=theme.TEXT_MUTED)
+        self.refresh_primary_button()
+
+    def presence_fields(self):
+        """Everything that ends up in the Discord status, for change detection."""
+        return (self.game_combo.get().strip(),
+                *(e.get().strip() for e in (self.details_entry, self.state_entry,
+                                             self.large_image_entry, self.large_text_entry,
+                                             self.small_image_entry, self.small_text_entry)),
+                self.show_time_var.get(), tuple(self.party_size() or ()))
+
+    def party_size(self):
+        """[current, max] from the party inputs, or None when empty or invalid."""
+        try:
+            current, maximum = (int(v.get()) for v in self.party_vars)
+        except ValueError:
+            return None
+        return [current, maximum] if 0 < current <= maximum else None
+
+    def refresh_primary_button(self):
+        """Connect -> Apply status -> No pending changes, like a save button."""
+        if not self.connected:
             self.primary_button.config(text="Connect to Discord", variant="success",
-                                       command=self.connect_discord)
+                                       state=tk.NORMAL, command=self.connect_discord)
+        elif self.presence_fields() != self.applied:
+            self.primary_button.config(text="Apply status", variant="primary",
+                                       state=tk.NORMAL, command=self.update_presence)
+        else:
+            self.primary_button.config(text="No pending changes", variant="primary",
+                                       state=tk.DISABLED)
 
     def select_db_source(self, source):
         """Handle a click on the database source segmented control."""
@@ -705,9 +858,12 @@ class DiscordRPCApp:
         self.preview_art.itemconfig(self.preview_initials, text=initials)
         self.preview_title.config(text=theme.ellipsize(title or "No game selected", 32))
 
-        for label, entry in ((self.preview_details, self.details_entry),
-                             (self.preview_state, self.state_entry)):
-            value = entry.get().strip()
+        party = self.party_size()
+        state_text = self.state_entry.get().strip()
+        if party:
+            state_text = f"{state_text} ({party[0]} of {party[1]})".strip()
+        for label, value in ((self.preview_details, self.details_entry.get().strip()),
+                             (self.preview_state, state_text)):
             label.config(text=theme.ellipsize(value, 40))
             if value:
                 label.grid()
@@ -722,6 +878,19 @@ class DiscordRPCApp:
             self.preview_timer.grid()
         else:
             self.preview_timer.grid_remove()
+
+        if hasattr(self, "primary_button"):
+            self.refresh_controls()
+
+    def refresh_controls(self):
+        """Sync buttons and markers that depend on the current inputs."""
+        self.refresh_primary_button()
+        self.time_button.config(variant="icon_active" if self.show_time_var.get() else "icon")
+        known = self.game_combo.get().strip() in self.game_titles
+        self.game_check.config(fg=theme.GREEN if known else theme.BG)
+        for entry, key, button in self.reset_buttons:
+            changed = bool(self.loaded_game) and entry.get() != str(self.loaded_game.get(key, ''))
+            button.config(state=tk.NORMAL if changed else tk.DISABLED)
 
     def tick(self):
         """Once-a-second refresh of timers."""
@@ -789,7 +958,7 @@ class DiscordRPCApp:
             # Refresh games based on selected console
             current_console = self.console_combo.get() if consoles else None
             titles = self.db.get_all_game_titles_by_console(current_console) if current_console else []
-            self.game_combo['values'] = titles
+            self.set_game_titles(titles)
             self.log_message(f"Database reloaded. {sum(len(self.db.get_all_game_titles_by_console(c)) for c in consoles)} games across {len(consoles)} consoles.")
             messagebox.showinfo("Success", "Database reloaded successfully!")
         except Exception as e:
@@ -801,7 +970,7 @@ class DiscordRPCApp:
         try:
             console = self.console_combo.get()
             titles = self.db.get_all_game_titles_by_console(console)
-            self.game_combo['values'] = titles
+            self.set_game_titles(titles)
             if titles:
                 self.game_combo.set(titles[0])
             self.log_message(f"Console selected: {console} ({len(titles)} games)")
@@ -854,7 +1023,7 @@ class DiscordRPCApp:
                     titles = self.db.get_all_game_titles_by_console(consoles[0])
                 else:
                     titles = []
-                self.game_combo['values'] = titles
+                self.set_game_titles(titles)
                 self.log_message("Switched to local file mode")
             except Exception as e:
                 self.log_message(f"ERROR: Failed to switch to local file - {e}")
@@ -895,7 +1064,7 @@ class DiscordRPCApp:
                 titles = self.db.get_all_game_titles_by_console(consoles[0])
             else:
                 titles = []
-            self.game_combo['values'] = titles
+            self.set_game_titles(titles)
             games_count = sum(len(self.db.get_all_game_titles_by_console(c)) for c in consoles)
             self.log_message(f"Loaded {games_count} games from local file across {len(consoles)} consoles")
             messagebox.showinfo("Success", "Local database loaded successfully!")
@@ -950,7 +1119,7 @@ class DiscordRPCApp:
                     titles = self.db.get_all_game_titles_by_console(consoles[0])
                 else:
                     titles = []
-                self.game_combo['values'] = titles
+                self.set_game_titles(titles)
                 games_count = sum(len(self.db.get_all_game_titles_by_console(c)) for c in consoles)
                 self.log_message(f"Successfully loaded {games_count} games from Google Sheets across {len(consoles)} consoles")
                 messagebox.showinfo("Success", 
@@ -1036,10 +1205,36 @@ That's it! Click "Load" to import your games from Google Sheets.
         text.insert(tk.END, instructions)
         text.config(state=tk.DISABLED)
     
+    def set_game_titles(self, titles):
+        """Replace the game list (for a console) and clear any search filter."""
+        self.game_titles = list(titles)
+        self.game_combo['values'] = self.game_titles
+        count = len(self.game_titles)
+        if hasattr(self, "game_hint"):
+            self.game_hint.config(text=f"{count} game{'s' if count != 1 else ''}. Type to search, or enter any name."
+                                  if count
+                                  else "Type a game name, or load a database in Settings.")
+
+    def on_game_typed(self, event):
+        """Filter the dropdown to titles containing what has been typed."""
+        if event.keysym in ("Return", "Up", "Down", "Escape", "Tab"):
+            return
+        text = self.game_combo.get().strip().lower()
+        matches = [t for t in self.game_titles if text in t.lower()] if text else self.game_titles
+        self.game_combo['values'] = matches
+        self.update_preview()
+
     def on_game_selected(self, event):
-        """Handle game selection from dropdown."""
-        game_title = self.game_combo.get()
-        game_data = self.db.get_game_data(game_title)
+        """Load the database row when the game box holds a known title."""
+        game_title = self.game_combo.get().strip()
+        if game_title not in self.game_titles:
+            self.loaded_game = None
+            return
+        if self.loaded_game is not None and self.loaded_game.get('Game Title') == game_title:
+            return
+        game_data = (self.db.get_game_data(game_title, self.console_combo.get() or None)
+                     or self.db.get_game_data(game_title))
+        self.loaded_game = game_data
         
         if game_data:
             # Populate fields with game data
@@ -1092,11 +1287,13 @@ That's it! Click "Load" to import your games from Google Sheets.
                 "We'll continue with the provided values, but images may not appear until you use asset keys."
             )
         
-        # Set start time if showing elapsed time
-        if show_time and not self.start_time:
-            self.start_time = int(time.time())
-        elif not show_time:
+        # The timer restarts for a different game, unless set to keep it
+        game = self.game_combo.get().strip()
+        switched = self.applied is not None and self.applied[0] != game
+        if not show_time:
             self.start_time = None
+        elif not self.start_time or (switched and not self.keep_timer_var.get()):
+            self.start_time = int(time.time())
         
         # Update presence
         success = self.rpc.update_presence(
@@ -1106,14 +1303,15 @@ That's it! Click "Load" to import your games from Google Sheets.
             large_text=large_text if large_text else None,
             small_image=small_image if small_image else None,
             small_text=small_text if small_text else None,
-            start_timestamp=self.start_time
+            start_timestamp=self.start_time,
+            party_size=self.party_size()
         )
         
         if success:
-            game = (self.game_combo.get().strip() or large_text or details)
-            self.session_logger.start(game, self.console_combo.get().strip() or None)
+            self.applied = self.presence_fields()
+            self.session_logger.start(game or large_text or details, self.console_combo.get().strip() or None)
             self.log_message("Presence updated successfully")
-            messagebox.showinfo("Success", "Discord Rich Presence updated!")
+            self.refresh_primary_button()
         else:
             self.log_message("ERROR: Failed to update presence")
             messagebox.showerror("Error", "Failed to update presence. Check the log for details.")
@@ -1127,8 +1325,9 @@ That's it! Click "Load" to import your games from Google Sheets.
         if self.rpc.clear_presence():
             self.session_logger.stop("clear")
             self.start_time = None
+            self.applied = None
             self.log_message("Presence cleared")
-            messagebox.showinfo("Success", "Discord Rich Presence cleared!")
+            self.refresh_primary_button()
         else:
             self.log_message("ERROR: Failed to clear presence")
     
