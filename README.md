@@ -14,14 +14,19 @@ A Python application with a graphical user interface (GUI) that allows you to di
 - 📝 **Customizable**: Edit all presence fields directly in the UI
 - 💾 **Persistent Config**: Save your Discord Client ID in a config file
 - 📊 **Playtime Stats**: Sessions are logged automatically; the Stats tab shows playtime trends, top games and recent sessions
+- 🎨 **Console Themes**: The UI recolours itself for PlayStation, Xbox or Nintendo when you switch console
 
 ## Screenshots
 
-The app displays information like:
-- "Now Playing Pokemon Red"
-- Game state (e.g., "Exploring Kanto")
-- Custom images for each game
-- Elapsed time since you started playing
+The UI is a retro desktop styled after [the1azreen.neocities.org](https://the1azreen.neocities.org/): bordered windows with title bars, bevelled buttons and a taskbar. The colours follow the console you pick: PlayStation blue, Xbox green or Nintendo red.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/playstation.png" alt="PlayStation theme with Gran Turismo 4 selected" width="260"><br>PlayStation</td>
+    <td align="center"><img src="docs/screenshots/xbox.png" alt="Xbox theme with Halo 3 selected" width="260"><br>Xbox</td>
+    <td align="center"><img src="docs/screenshots/nintendo.png" alt="Nintendo theme with Zelda: Tears of the Kingdom selected" width="260"><br>Nintendo</td>
+  </tr>
+</table>
 
 ## Prerequisites
 
@@ -62,6 +67,16 @@ The app displays information like:
        SHEET_URL = https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
        CREDENTIALS_PATH = credentials.json
        ```
+
+## Windows Exe
+
+To run the app without Python, build a standalone exe:
+
+```bat
+build_exe.bat
+```
+
+This installs the build tools, then writes `dist\JustAnotherDRP.exe` with the pixel-window icon from `assets\app.ico` (regenerate it with `python tools\make_icon.py`). Put `config.ini` and `games_database.xlsx` (and `credentials.json` if you use Google Sheets) next to the exe; it reads them from its own folder.
 
 ## Usage
 
@@ -141,9 +156,9 @@ The game database can be stored in either:
 | **Game Title** | Name of the game (shown in dropdown) | Pokemon Red |
 | **Details** | First line of Rich Presence | Playing Pokemon Red |
 | **State** | Second line of Rich Presence | Exploring Kanto |
-| **Large Image** | Asset key for large image | pokemon_red |
+| **Large Image** | Image URL or asset key for the large image | https://…/cover.jpg |
 | **Large Image Text** | Hover text for large image | Pokemon Red |
-| **Small Image** | Asset key for small image | pokeball |
+| **Small Image** | Image URL or asset key for the small image | https://…/logo.png |
 | **Small Image Text** | Hover text for small image | Catching Pokemon |
 
 2) Long format (alternative): use columns `Game Title | Field | Value` and put each field in its own row. Supported Fields: `Details`, `State`, `Large Image`, `Large Image Text`, `Small Image`, `Small Image Text`. The app will pivot this into wide format automatically.
@@ -153,8 +168,8 @@ The game database can be stored in either:
 - Create one sheet/tab per console. For example: `PS3`, `PS4`, `PS5`.
 - The sheet name becomes the Console value automatically.
 - You can mix formats per sheet (wide or long), the app will normalize.
-- This repo includes a generator script that creates `games_database.xlsx` with PS3/PS4/PS5 tabs (100 rows each), and CSVs per console in `data/`.
-- To upload to Google Sheets: create a new spreadsheet and add three tabs named PS3, PS4, PS5; then import each CSV (`data/ps3.csv`, etc.) to its respective tab, or copy/paste from the Excel file.
+- Tab names also pick the UI colours: names starting with `PS` or containing `PlayStation` use the PlayStation theme, `Xbox` the Xbox theme, and Nintendo systems (`NES`, `SNES`, `Nintendo 64`, `GameCube`, `Wii`, `Switch`, `Game Boy`, `DS`, `3DS`) the Nintendo theme.
+- To use Google Sheets instead: create a spreadsheet with the same tab names and import each sheet of `games_database.xlsx` into its tab (File > Import in Google Sheets).
 
 ### Adding New Games
 
@@ -173,19 +188,12 @@ The game database can be stored in either:
 
 ### Using Custom Images
 
-Discord Rich Presence only displays images that are uploaded as Art Assets to your Discord application. The image fields in the worksheet/UI should contain the asset key (name), not a web URL.
+The "Large Image" and "Small Image" fields accept either:
 
-To use custom images in your Rich Presence:
+- **A direct image URL** (easiest): a link straight to a PNG, JPG or GIF, such as box art from `upload.wikimedia.org`. SVG files don't render, and the URL must be under 256 characters. Box art for the large image and a console logo for the small one works well.
+- **An Art Asset key**: upload images in the [Developer Portal](https://discord.com/developers/applications) under "Rich Presence" > "Art Assets" (1024x1024 recommended for large, 256x256+ for small), then use the name you gave each image. New assets can take a few minutes to appear; restart Discord if one doesn't show up.
 
-1. Go to your Discord Application in the [Developer Portal](https://discord.com/developers/applications)
-2. Navigate to "Rich Presence" > "Art Assets"
-3. Upload your images (1024x1024 recommended for large; 256x256+ for small) and give them names (these names are your asset keys)
-4. Put those asset key names in the "Large Image" and "Small Image" columns in your sheet or in the app fields
-5. Optionally set hover text in "Large Image Text" and "Small Image Text"
-
-Notes:
-- External image URLs (http/https) are ignored by Discord RPC for these fields and won't render. The app will warn you if it detects a URL in an image field.
-- After uploading a new asset, it may take a few minutes to propagate. Restart Discord if the image doesn't appear immediately.
+Set hover text in "Large Image Text" and "Small Image Text".
 
 ## Google Sheets Setup
 
@@ -338,14 +346,20 @@ JustAnotherDiscordRichPresenceApp/
 ├── session_log.py          # Logs play sessions to SQLite in your user data folder
 ├── pipeline.py             # Turns raw session events into sessions and daily totals
 ├── stats.py                # Stats queries for the Stats tab
+├── theme.py                # Retro window theme, brand palettes and custom widgets
+├── build_exe.bat           # Builds dist\JustAnotherDRP.exe with PyInstaller
+├── assets/app.ico          # App icon
+├── fonts/                  # Bundled pixel fonts (Press Start 2P, VT323)
+├── tools/                  # Icon generator and sample session data generator
 ├── tests/                  # Unit tests for the session pipeline
-├── games_database.xlsx     # Local game information database
+├── docs/screenshots/       # Screenshots used in this README
+├── games_database.xlsx     # Local game information database (you provide)
 ├── credentials.json        # Google Service Account credentials (you provide)
 ├── config.ini              # Configuration file (create from .example)
 ├── config.ini.example      # Configuration template
 ├── requirements.txt        # Python dependencies
-├── .gitignore             # Git ignore rules
-└── README.md              # This file
+├── .gitignore              # Git ignore rules
+└── README.md               # This file
 ```
 
 ## Configuration Options
@@ -399,9 +413,8 @@ IDLE_MINUTES = 15
 - Try creating a new Excel file with the correct column headers
 
 ### Images not showing
-- Upload images to Discord Developer Portal under "Art Assets"
-- Use the exact asset key name in the database
-- Wait a few minutes for Discord to update the assets
+- For URLs: check the link opens the image itself (not a web page) and isn't an SVG
+- For asset keys: use the exact name from "Art Assets" and wait a few minutes after uploading
 
 ### Google Sheets not loading
 - See the [Google Sheets Setup](#google-sheets-setup) section above
@@ -427,9 +440,6 @@ python database.py
 
 # Test Discord RPC module (requires valid Client ID)
 python discord_rpc.py
-
-# Generate sample database (Excel and CSVs)
-python tools/generate_sample_database.py
 ```
 
 ### Adding Features

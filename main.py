@@ -141,8 +141,11 @@ class DiscordRPCApp:
         self.build_header()
         self.build_tab_bar()
 
-        self.tab_container = tk.Frame(self.root, bg=theme.BG)
-        self.tab_container.grid(row=2, column=0, sticky="nsew")
+        # Tab pages live inside one website-style window
+        self.main_window = theme.Window(self.root)
+        self.main_window.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self.tab_container = tk.Frame(self.main_window.content, bg=theme.BG)
+        self.tab_container.pack(fill="both", expand=True)
         self.tab_container.columnconfigure(0, weight=1)
         self.tab_container.rowconfigure(0, weight=1)
         self.tabs = {}
@@ -166,20 +169,20 @@ class DiscordRPCApp:
 
     def build_header(self):
         """Top bar with avatar, connection status and shortcut icons."""
-        header = tk.Frame(self.root, bg=theme.BG_SECONDARY, padx=16, pady=12)
+        header = tk.Frame(self.root, bg=theme.DESKTOP, padx=16, pady=12)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
 
-        self.avatar = tk.Canvas(header, width=42, height=42, bg=theme.BG_SECONDARY,
+        self.avatar = tk.Canvas(header, width=42, height=42, bg=theme.DESKTOP,
                                 highlightthickness=0)
         self.avatar_photo = None
         self.draw_avatar()
         self.avatar.grid(row=0, column=0, rowspan=2, padx=(0, 10))
 
-        self.header_title = tk.Label(header, text="Rich Presence Manager", bg=theme.BG_SECONDARY,
-                                     fg=theme.TEXT_STRONG, font=theme.FONT_TITLE)
+        self.header_title = tk.Label(header, text="Rich Presence Manager", bg=theme.DESKTOP,
+                                     fg=theme.BORDER, font=theme.FONT_TITLE)
         self.header_title.grid(row=0, column=1, sticky="sw")
-        self.connection_status = tk.Label(header, text="Disconnected", bg=theme.BG_SECONDARY,
+        self.connection_status = tk.Label(header, text="Disconnected", bg=theme.DESKTOP,
                                           fg=theme.TEXT_MUTED, font=theme.FONT_SMALL)
         self.connection_status.grid(row=1, column=1, sticky="nw")
 
@@ -197,11 +200,11 @@ class DiscordRPCApp:
         if self.avatar_photo:
             c.create_image(19, 19, image=self.avatar_photo)
             # Mask the square corners with a ring in the header colour
-            c.create_oval(-1.5, -1.5, 39.5, 39.5, outline=theme.BG_SECONDARY, width=7)
+            c.create_oval(-1.5, -1.5, 39.5, 39.5, outline=theme.DESKTOP, width=7)
         else:
-            c.create_oval(3, 3, 35, 35, fill=theme.BLURPLE, outline="")
-            c.create_text(19, 19, text=initial or "▶", fill="#FFFFFF", font=theme.FONT_TITLE)
-        self.status_dot = c.create_oval(26, 26, 41, 41, outline=theme.BG_SECONDARY, width=3,
+            c.create_oval(3, 3, 35, 35, fill=theme.BLURPLE, outline=theme.BORDER, width=2)
+            c.create_text(19, 19, text=initial or "▶", fill=theme.ACCENT_FG, font=theme.FONT_TITLE)
+        self.status_dot = c.create_oval(26, 26, 41, 41, outline=theme.DESKTOP, width=3,
                                         fill=theme.GREEN if self.connected else theme.OFFLINE)
 
     def show_discord_user(self, user):
@@ -239,7 +242,7 @@ class DiscordRPCApp:
 
     def build_tab_bar(self):
         """Segmented tab buttons under the header."""
-        bar = tk.Frame(self.root, bg=theme.BG_SECONDARY, padx=16)
+        bar = tk.Frame(self.root, bg=theme.DESKTOP, padx=12)
         bar.grid(row=1, column=0, sticky="ew")
         self.tab_buttons = {}
         for i, name in enumerate(TAB_NAMES):
@@ -253,6 +256,7 @@ class DiscordRPCApp:
         """Raise the given tab and highlight its button."""
         self.current_tab = name
         self.tabs[name].tkraise()
+        self.main_window.set_title(name)
         for tab_name, button in self.tab_buttons.items():
             button.config(variant="tab_active" if tab_name == name else "tab")
         if name == "Stats":
@@ -386,18 +390,18 @@ class DiscordRPCApp:
                                              "Also toggled by the ⌛ button below."), pady=(6, 0))
 
     def build_preview_card(self, parent):
-        """Card mimicking the 'Playing' activity on a Discord profile."""
-        card = tk.Frame(parent, bg=theme.CARD, padx=16, pady=14)
+        """Window mimicking the 'Playing' activity on a Discord profile."""
+        window = theme.Window(parent, "Playing")
+        card = tk.Frame(window.content, bg=theme.CARD, padx=14, pady=12)
+        card.pack(fill="both", expand=True)
         card.columnconfigure(1, weight=1)
-        tk.Label(card, text="Playing", bg=theme.CARD, fg=theme.TEXT,
-                 font=theme.FONT_HEADING).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         self.preview_art = tk.Canvas(card, width=72, height=72, bg=theme.CARD, highlightthickness=0)
-        theme.round_rect(self.preview_art, 0, 0, 64, 64, 10, fill=theme.BLURPLE)
-        self.preview_initials = self.preview_art.create_text(32, 32, text="?", fill="#FFFFFF",
+        self.preview_art.create_rectangle(1, 1, 64, 64, fill=theme.BLURPLE, outline=theme.BORDER, width=2)
+        self.preview_initials = self.preview_art.create_text(33, 33, text="?", fill=theme.ACCENT_FG,
                                                              font=theme.FONT_DISPLAY)
         self.preview_small = self.preview_art.create_oval(46, 46, 70, 70, fill=theme.BG_TERTIARY,
-                                                          outline=theme.CARD, width=3)
+                                                          outline=theme.BORDER, width=2)
         self.preview_art.grid(row=1, column=0, sticky="nw", padx=(0, 10))
 
         text = tk.Frame(card, bg=theme.CARD)
@@ -413,21 +417,22 @@ class DiscordRPCApp:
         for row, label in enumerate((self.preview_title, self.preview_details,
                                      self.preview_state, self.preview_timer)):
             label.grid(row=row, column=0, sticky="w")
-        return card
+        return window
 
     def build_images_tab(self):
         """Asset key and hover text inputs."""
         form = self.add_tab("Images")
         form.add(theme.hint_label(form.body,
-                                  "Discord only shows images uploaded as Art Assets under Rich Presence "
-                                  "in the Developer Portal. Enter the asset key (its name), not a URL."),
+                                  "Use a direct image link (PNG or JPG, not SVG), or the key of an Art "
+                                  "Asset uploaded under Rich Presence in the Developer Portal."),
                  pady=(0, 20))
-        self.large_image_entry = self.add_field(form, "Large image (asset key)", reset_key='Large Image')
+        self.large_image_entry = self.add_field(form, "Large image (URL or asset key)",
+                                                reset_key='Large Image')
         self.large_text_entry = self.add_field(form, "Large image text",
                                                "Shown when hovering over the large image.",
                                                reset_key='Large Image Text')
         form.add(theme.divider(form.body), pady=(4, 20))
-        self.small_image_entry = self.add_field(form, "Small image (asset key)",
+        self.small_image_entry = self.add_field(form, "Small image (URL or asset key)",
                                                 "Shown as a badge in the corner of the large image.",
                                                 reset_key='Small Image')
         self.small_text_entry = self.add_field(form, "Small image text",
@@ -770,25 +775,34 @@ class DiscordRPCApp:
         self.log_text.tag_configure("warning", foreground=theme.YELLOW)
 
     def build_footer(self):
-        """Bottom bar with the main action, timer and secondary actions."""
-        footer = tk.Frame(self.root, bg=theme.BG_SECONDARY, padx=16, pady=12)
-        footer.grid(row=3, column=0, sticky="ew")
+        """Taskbar with the main action, timer clock and secondary actions."""
+        edge = tk.Frame(self.root, bg=theme.BORDER)  # bright top edge, like the site's taskbar
+        edge.grid(row=3, column=0, sticky="ew")
+        footer = tk.Frame(edge, bg=theme.TASKBAR, padx=8, pady=6)
+        footer.pack(fill="x", pady=(2, 0))
         footer.columnconfigure(0, weight=1)
+
+        def separator(column):
+            tk.Frame(footer, bg=theme.TASKBAR_FG, width=2).grid(row=0, column=column, sticky="ns",
+                                                                 padx=6, pady=2)
 
         self.primary_button = theme.FlatButton(footer, pady=8)
         self.primary_button.grid(row=0, column=0, sticky="ew")
+        separator(1)
         self.time_button = self.icon_button(footer, "⌛",
                                             command=lambda: self.show_time_var.set(not self.show_time_var.get()))
-        self.time_button.grid(row=0, column=1, sticky="ns", padx=(8, 0))
-        self.timer_label = tk.Label(footer, bg=theme.BG_TERTIARY, fg=theme.TEXT_MUTED,
-                                    font=theme.FONT_BUTTON, padx=10, width=8)
-        self.timer_label.grid(row=0, column=2, sticky="ns", padx=(4, 0))
+        self.time_button.grid(row=0, column=2, sticky="ns")
+        # Sunken clock box, like the site's taskbar date
+        self.timer_label = tk.Label(footer, bg=theme.TASKBAR, fg=theme.TASKBAR_FG, relief="sunken", bd=2,
+                                    font=theme.FONT_BUTTON, padx=8, width=8)
+        self.timer_label.grid(row=0, column=3, sticky="ns", padx=(4, 0))
+        separator(4)
         self.clear_button = theme.FlatButton(footer, text="Clear", variant="secondary", pady=8,
                                              command=self.clear_presence)
-        self.clear_button.grid(row=0, column=3, sticky="ns", padx=(8, 0))
+        self.clear_button.grid(row=0, column=5, sticky="ns")
         self.disconnect_button = theme.FlatButton(footer, text="Disconnect", variant="danger", pady=8,
                                                   command=self.disconnect_discord)
-        self.disconnect_button.grid(row=0, column=4, sticky="ns", padx=(8, 0))
+        self.disconnect_button.grid(row=0, column=6, sticky="ns", padx=(6, 0))
 
     def set_connected(self, connected):
         """Reflect the Discord connection state across the UI."""
@@ -897,8 +911,7 @@ class DiscordRPCApp:
         """Once-a-second refresh of timers."""
         self.update_preview()
         running = self.connected and self.start_time
-        self.timer_label.config(text=self.elapsed_text(),
-                                fg=theme.TEXT if running else theme.TEXT_MUTED)
+        self.timer_label.config(text=("▶ " if running else "") + self.elapsed_text())
         self.root.after(1000, self.tick)
 
     def log_message(self, message):
@@ -1208,6 +1221,10 @@ That's it! Click "Load" to import your games from Google Sheets.
     
     def set_game_titles(self, titles):
         """Replace the game list (for a console) and clear any search filter."""
+        # Every console change lands here, so this is where the colours follow the brand
+        changed = theme.set_palette(self.root, theme.brand_for(self.console_combo.get()))
+        if changed and hasattr(self, "log_text"):
+            self.log_message(f"Theme: {theme.brand_name()}")
         self.game_titles = list(titles)
         self.game_combo['values'] = self.game_titles
         count = len(self.game_titles)
@@ -1274,20 +1291,6 @@ That's it! Click "Load" to import your games from Google Sheets.
         small_text = self.small_text_entry.get().strip()
         show_time = self.show_time_var.get()
 
-        # Warn if URLs are used for images (Discord RPC requires Asset Keys)
-        is_large_url = large_image.lower().startswith(("http://", "https://")) if large_image else False
-        is_small_url = small_image.lower().startswith(("http://", "https://")) if small_image else False
-        if (is_large_url or is_small_url) and not getattr(self, "_image_url_warned", False):
-            self._image_url_warned = True
-            messagebox.showwarning(
-                "Image URLs not supported",
-                "Discord Rich Presence does not display arbitrary image URLs.\n\n"
-                "Upload your images as Art Assets in your Discord application (Developer Portal) "
-                "and put the asset key (name) in the 'Large Image' / 'Small Image' fields. "
-                "The '* Text' fields are hover text only.\n\n"
-                "We'll continue with the provided values, but images may not appear until you use asset keys."
-            )
-        
         # The timer restarts for a different game, unless set to keep it
         game = self.game_combo.get().strip()
         switched = self.applied is not None and self.applied[0] != game
