@@ -3,9 +3,11 @@ Discord Rich Presence integration module.
 """
 from pypresence import Presence
 from pypresence.exceptions import DiscordNotFound, InvalidPipe, ConnectionTimeout, InvalidID, DiscordError
+from pypresence.payloads import Payload
 from pypresence.utils import get_ipc_path
 import asyncio
 import json
+import os
 import struct
 import sys
 import time
@@ -65,6 +67,7 @@ class DiscordRPC:
         self.connected = False
         self.current_presence = {}
         self.user = None  # dict with id, username, global_name, avatar once connected
+        self.name_accepted = None  # whether Discord kept the custom activity name last time
         self._update_thread = None
         self._stop_update = False
     
@@ -108,11 +111,13 @@ class DiscordRPC:
     
     def update_presence(self, details=None, state=None, large_image=None, 
                        large_text=None, small_image=None, small_text=None,
-                       start_timestamp=None, party_size=None):
+                       start_timestamp=None, party_size=None, name=None):
         """
         Update Discord Rich Presence.
-        
+
         Args:
+            name: Activity title, e.g. the game; shown instead of the Discord
+                application's name where Discord honours it (see name_accepted)
             details: First line of presence (e.g., "Playing Pokemon Red")
             state: Second line of presence (e.g., "Exploring Kanto")
             large_image: Asset name or URL for large image
@@ -150,8 +155,16 @@ class DiscordRPC:
             if party_size:
                 presence['party_size'] = [int(n) for n in party_size]
             
-            # Update presence
-            self.rpc.update(**presence)
+            if name:
+                # pypresence 4.3.0 has no `name` argument, so add it to the raw payload
+                payload = Payload.set_activity(pid=os.getpid(), activity=True, **presence)
+                payload.data["args"]["activity"]["name"] = str(name)
+                response = self.rpc.update(payload_override=payload)
+                # Discord echoes the activity it stored; a different name means it ignored ours
+                stored = ((response or {}).get("data") or {}).get("name")
+                self.name_accepted = stored == str(name)
+            else:
+                self.rpc.update(**presence)
             self.current_presence = presence.copy()
             print("Presence updated successfully")
             return True

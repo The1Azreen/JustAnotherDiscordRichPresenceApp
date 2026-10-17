@@ -19,7 +19,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --add-data "%~dp0fonts;fonts" ^
     --add-data "%~dp0assets;assets" ^
     --specpath build ^
-    --exclude-module matplotlib --exclude-module IPython --exclude-module PIL ^
+    --exclude-module matplotlib --exclude-module IPython ^
     --exclude-module scipy --exclude-module pytest ^
     --exclude-module pyarrow --exclude-module numba --exclude-module llvmlite ^
     --exclude-module sqlalchemy --exclude-module tqdm --exclude-module fsspec --exclude-module lxml ^

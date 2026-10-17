@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import base64
 import configparser
+import io
 import os
 import sys
 import threading
@@ -18,8 +19,19 @@ import theme
 import time
 from datetime import datetime
 
+try:
+    # Decodes JPG cover art for the preview; without it the preview shows initials
+    from PIL import Image, ImageOps, ImageTk
+except ImportError:
+    Image = None
+
 
 TAB_NAMES = ("Presence", "Images", "Stats", "Settings", "Log")
+
+# Console badges from tools/make_badges.py, as linked from the game database. The
+# preview reads these from the bundled assets/badges/ folder instead of downloading them.
+BADGE_URL = "https://raw.githubusercontent.com/The1Azreen/JustAnotherDiscordRichPresenceApp/main/assets/badges/"
+BADGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "badges")
 
 
 class DiscordRPCApp:
@@ -50,6 +62,9 @@ class DiscordRPCApp:
         self.applied = None        # snapshot of the fields last sent to Discord
         self.reset_buttons = []    # (entry, database column, button)
         self.stats_period = "This month"
+        self.preview_urls = {}     # slot ("large"/"small") -> URL currently shown
+        self.preview_photos = {}   # slot -> PhotoImage, kept alive while displayed
+        self.image_cache = {}      # URL -> decoded image, or None if it failed to load
         
         # Load configuration
         self.load_config()
@@ -203,7 +218,12 @@ class DiscordRPCApp:
             c.create_oval(-1.5, -1.5, 39.5, 39.5, outline=theme.DESKTOP, width=7)
         else:
             c.create_oval(3, 3, 35, 35, fill=theme.BLURPLE, outline=theme.BORDER, width=2)
-            c.create_text(19, 19, text=initial or "▶", fill=theme.ACCENT_FG, font=theme.FONT_TITLE)
+            if initial:
+                c.create_text(19, 20, text=initial, fill=theme.ACCENT_FG, font=theme.FONT_TITLE)
+            else:
+                # Drawn rather than a ▶ glyph, which falls back to another font and sits off-centre;
+                # the triangle's centroid is nudged right of the circle centre so it looks centred
+                c.create_polygon(15, 11, 15, 27, 28, 19, fill=theme.ACCENT_FG, outline="")
         self.status_dot = c.create_oval(26, 26, 41, 41, outline=theme.DESKTOP, width=3,
                                         fill=theme.GREEN if self.connected else theme.OFFLINE)
 
@@ -400,8 +420,11 @@ class DiscordRPCApp:
         self.preview_art.create_rectangle(1, 1, 64, 64, fill=theme.BLURPLE, outline=theme.BORDER, width=2)
         self.preview_initials = self.preview_art.create_text(33, 33, text="?", fill=theme.ACCENT_FG,
                                                              font=theme.FONT_DISPLAY)
+        # Cover art and console badge, filled in from the image URLs by show_preview_image()
+        self.preview_large_image = self.preview_art.create_image(33, 33, state="hidden")
         self.preview_small = self.preview_art.create_oval(46, 46, 70, 70, fill=theme.BG_TERTIARY,
                                                           outline=theme.BORDER, width=2)
+        self.preview_small_image = self.preview_art.create_image(58, 58, state="hidden")
         self.preview_art.grid(row=1, column=0, sticky="nw", padx=(0, 10))
 
         text = tk.Frame(card, bg=theme.CARD)
@@ -887,6 +910,8 @@ class DiscordRPCApp:
 
         has_small = bool(getattr(self, "small_image_entry", None) and self.small_image_entry.get().strip())
         self.preview_art.itemconfig(self.preview_small, state="normal" if has_small else "hidden")
+        if hasattr(self, "small_image_entry"):  # both image fields exist once the Images tab is built
+            self.refresh_preview_images()
 
         if self.show_time_var.get():
             self.preview_timer.config(text=f"▶ {self.elapsed_text()}")
@@ -896,6 +921,68 @@ class DiscordRPCApp:
 
         if hasattr(self, "primary_button"):
             self.refresh_controls()
+
+    def refresh_preview_images(self):
+        """Load the image URLs into the preview when they change (asset keys can't be previewed)."""
+        for slot, entry in (("large", self.large_image_entry), ("small", self.small_image_entry)):
+            url = entry.get().strip()
+            if url == self.preview_urls.get(slot):
+                continue
+            self.preview_urls[slot] = url
+            local = os.path.join(BADGE_DIR, url[len(BADGE_URL):]) if url.startswith(BADGE_URL) else None
+            if Image and local and os.path.isfile(local):
+                if url not in self.image_cache:
+                    try:
+                        self.image_cache[url] = Image.open(local).convert("RGBA")
+                    except OSError:
+                        self.image_cache[url] = None
+                self.show_preview_image(slot, self.image_cache[url])
+                continue
+            if Image and url.lower().startswith(("http://", "https://")):
+                if url in self.image_cache:
+                    self.show_preview_image(slot, self.image_cache[url])
+                    continue
+                threading.Thread(target=self.fetch_preview_image, args=(slot, url), daemon=True).start()
+            self.show_preview_image(slot, None)
+
+    def fetch_preview_image(self, slot, url):
+        """Download and decode an image off the UI thread, then hand it back to Tk."""
+        try:
+            # Wikimedia and some other hosts refuse requests without a User-Agent
+            request = urllib.request.Request(url, headers={"User-Agent": "JustAnotherDRP/1.0"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                data = response.read(8 * 1024 * 1024)
+            image = Image.open(io.BytesIO(data))
+            image = image.convert("RGBA")
+        except Exception as e:
+            print(f"Could not load preview image {url}: {e}")
+            image = None
+        self.root.after(0, self.on_preview_image, slot, url, image)
+
+    def on_preview_image(self, slot, url, image):
+        self.image_cache[url] = image
+        if self.preview_urls.get(slot) == url:  # ignore downloads the user has since replaced
+            self.show_preview_image(slot, image)
+
+    def show_preview_image(self, slot, image):
+        """Show cover art (cropped square) or the console badge (fitted in the circle)."""
+        c = self.preview_art
+        item = self.preview_large_image if slot == "large" else self.preview_small_image
+        if image is None:
+            self.preview_photos.pop(slot, None)
+            c.itemconfig(item, image="", state="hidden")
+            if slot == "large":
+                c.itemconfig(self.preview_initials, state="normal")
+            return
+        if slot == "large":
+            picture = ImageOps.fit(image, (60, 60), Image.LANCZOS)
+        else:
+            picture = ImageOps.contain(image, (24, 24), Image.LANCZOS)  # fills the badge circle
+        photo = ImageTk.PhotoImage(picture)
+        self.preview_photos[slot] = photo
+        c.itemconfig(item, image=photo, state="normal")
+        if slot == "large":
+            c.itemconfig(self.preview_initials, state="hidden")
 
     def refresh_controls(self):
         """Sync buttons and markers that depend on the current inputs."""
@@ -1308,13 +1395,17 @@ That's it! Click "Load" to import your games from Google Sheets.
             small_image=small_image if small_image else None,
             small_text=small_text if small_text else None,
             start_timestamp=self.start_time,
-            party_size=self.party_size()
+            party_size=self.party_size(),
+            name=game or None
         )
-        
+
         if success:
             self.applied = self.presence_fields()
             self.session_logger.start(game or large_text or details, self.console_combo.get().strip() or None)
             self.log_message("Presence updated successfully")
+            if game and self.rpc.name_accepted is False:
+                self.log_message("Discord kept your application's name as the activity title. "
+                                 "Rename the app in the Developer Portal to change it.")
             self.refresh_primary_button()
         else:
             self.log_message("ERROR: Failed to update presence")

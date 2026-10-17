@@ -190,7 +190,8 @@ The game database can be stored in either:
 
 The "Large Image" and "Small Image" fields accept either:
 
-- **A direct image URL** (easiest): a link straight to a PNG, JPG or GIF, such as box art from `upload.wikimedia.org`. SVG files don't render, and the URL must be under 256 characters. Box art for the large image and a console logo for the small one works well.
+- **A direct image URL** (easiest): a link straight to a PNG, JPG or GIF, such as box art from `upload.wikimedia.org`. SVG files don't render, and the URL must be under 256 characters. Box art works well for the large image.
+- **A console badge** for the small image: `assets/badges/` has a readable pixel badge per console (made by `python tools/make_badges.py`), linked as `https://raw.githubusercontent.com/The1Azreen/JustAnotherDiscordRichPresenceApp/main/assets/badges/<name>.png`. New badges show in Discord once they're pushed to GitHub; the app's preview reads them locally.
 - **An Art Asset key**: upload images in the [Developer Portal](https://discord.com/developers/applications) under "Rich Presence" > "Art Assets" (1024x1024 recommended for large, 256x256+ for small), then use the name you gave each image. New assets can take a few minutes to appear; restart Discord if one doesn't show up.
 
 Set hover text in "Large Image Text" and "Small Image Text".
@@ -349,8 +350,9 @@ JustAnotherDiscordRichPresenceApp/
 ├── theme.py                # Retro window theme, brand palettes and custom widgets
 ├── build_exe.bat           # Builds dist\JustAnotherDRP.exe with PyInstaller
 ├── assets/app.ico          # App icon
+├── assets/badges/          # Console badges used as the Discord small image
 ├── fonts/                  # Bundled pixel fonts (Press Start 2P, VT323)
-├── tools/                  # Icon generator and sample session data generator
+├── tools/                  # Icon, badge and sample session data generators
 ├── tests/                  # Unit tests for the session pipeline
 ├── docs/screenshots/       # Screenshots used in this README
 ├── games_database.xlsx     # Local game information database (you provide)
