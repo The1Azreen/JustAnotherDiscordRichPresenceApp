@@ -1,7 +1,8 @@
 """
 Draw assets/badges/*.png: pixel-style console badges for Discord's small image.
 
-Each badge is a brand-coloured circle (PlayStation blue, Xbox green, Nintendo red)
+Each badge is a brand-coloured circle (PlayStation blue, Xbox green, Nintendo red,
+Sega blue, SNK red, Bandai orange, NEC navy)
 with a light ring and the console's short name in the bundled pixel font, so it
 stays readable at the ~20px Discord shows small images at, on a dark profile.
 
@@ -21,6 +22,7 @@ FONT = os.path.join(ROOT, "fonts", "PressStart2P-Regular.ttf")
 SIZE = 256
 
 SONY, XBOX, NINTENDO = "#0070D1", "#107C10", "#E60012"
+SEGA, SNK, BANDAI, NEC = "#0089CF", "#C8102E", "#E8590C", "#1F2A8C"
 BADGES = {  # database sheet name -> (file name, label, colour)
     "PS1": ("ps1", "PS1", SONY), "PS2": ("ps2", "PS2", SONY), "PS3": ("ps3", "PS3", SONY),
     "PS4": ("ps4", "PS4", SONY), "PS5": ("ps5", "PS5", SONY), "PSP": ("psp", "PSP", SONY),
@@ -34,6 +36,15 @@ BADGES = {  # database sheet name -> (file name, label, colour)
     "Game Boy": ("game-boy", "GB", NINTENDO), "Game Boy Color": ("game-boy-color", "GBC", NINTENDO),
     "Game Boy Advance": ("game-boy-advance", "GBA", NINTENDO),
     "Nintendo DS": ("ds", "DS", NINTENDO), "Nintendo 3DS": ("3ds", "3DS", NINTENDO),
+    "SG-1000": ("sg-1000", "SG1K", SEGA), "Master System": ("master-system", "SMS", SEGA),
+    "Genesis": ("genesis", "GEN", SEGA), "Sega CD": ("sega-cd", "SCD", SEGA),
+    "32X": ("32x", "32X", SEGA), "Saturn": ("saturn", "SAT", SEGA),
+    "Dreamcast": ("dreamcast", "DC", SEGA), "Game Gear": ("game-gear", "GG", SEGA),
+    "Neo Geo": ("neo-geo", "NEO", SNK), "Neo Geo CD": ("neo-geo-cd", "NGCD", SNK),
+    "Neo Geo Pocket": ("neo-geo-pocket", "NGP", SNK),
+    "WonderSwan": ("wonderswan", "WS", BANDAI), "WonderSwan Color": ("wonderswan-color", "WSC", BANDAI),
+    "TurboGrafx-16": ("turbografx-16", "TG16", NEC), "TurboGrafx-CD": ("turbografx-cd", "TGCD", NEC),
+    "SuperGrafx": ("supergrafx", "SGX", NEC), "PC-FX": ("pc-fx", "PCFX", NEC),
 }
 
 

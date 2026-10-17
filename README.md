@@ -14,17 +14,24 @@ A Python application with a graphical user interface (GUI) that allows you to di
 - 📝 **Customizable**: Edit all presence fields directly in the UI
 - 💾 **Persistent Config**: Save your Discord Client ID in a config file
 - 📊 **Playtime Stats**: Sessions are logged automatically; the Stats tab shows playtime trends, top games and recent sessions
-- 🎨 **Console Themes**: The UI recolours itself for PlayStation, Xbox or Nintendo when you switch console
+- 🎨 **Console Themes**: The UI recolours itself for PlayStation, Xbox, Nintendo, Sega, SNK, Bandai or NEC when you switch console
 
 ## Screenshots
 
-The UI is a retro desktop styled after [the1azreen.neocities.org](https://the1azreen.neocities.org/): bordered windows with title bars, bevelled buttons and a taskbar. The colours follow the console you pick: PlayStation blue, Xbox green or Nintendo red.
+The UI is a retro desktop styled after [the1azreen.neocities.org](https://the1azreen.neocities.org/): bordered windows with title bars, bevelled buttons and a taskbar. The colours follow the console you pick: PlayStation, Xbox, Nintendo, Sega, SNK, Bandai or NEC.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/playstation.png" alt="PlayStation theme with Gran Turismo 4 selected" width="260"><br>PlayStation</td>
-    <td align="center"><img src="docs/screenshots/xbox.png" alt="Xbox theme with Halo 3 selected" width="260"><br>Xbox</td>
-    <td align="center"><img src="docs/screenshots/nintendo.png" alt="Nintendo theme with Zelda: Tears of the Kingdom selected" width="260"><br>Nintendo</td>
+    <td align="center"><img src="docs/screenshots/playstation.png" alt="PlayStation theme with Gran Turismo 4 selected" width="200"><br>PlayStation</td>
+    <td align="center"><img src="docs/screenshots/xbox.png" alt="Xbox theme with Halo 3 selected" width="200"><br>Xbox</td>
+    <td align="center"><img src="docs/screenshots/nintendo.png" alt="Nintendo theme with Zelda: Tears of the Kingdom selected" width="200"><br>Nintendo</td>
+    <td align="center"><img src="docs/screenshots/sega.png" alt="Sega theme with Sonic the Hedgehog selected" width="200"><br>Sega</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/snk.png" alt="SNK theme with Metal Slug selected" width="200"><br>SNK</td>
+    <td align="center"><img src="docs/screenshots/bandai.png" alt="Bandai theme with Final Fantasy on WonderSwan Color selected" width="200"><br>Bandai</td>
+    <td align="center"><img src="docs/screenshots/nec.png" alt="NEC theme with Bonk's Adventure selected" width="200"><br>NEC</td>
+    <td></td>
   </tr>
 </table>
 
@@ -168,7 +175,17 @@ The game database can be stored in either:
 - Create one sheet/tab per console. For example: `PS3`, `PS4`, `PS5`.
 - The sheet name becomes the Console value automatically.
 - You can mix formats per sheet (wide or long), the app will normalize.
-- Tab names also pick the UI colours: names starting with `PS` or containing `PlayStation` use the PlayStation theme, `Xbox` the Xbox theme, and Nintendo systems (`NES`, `SNES`, `Nintendo 64`, `GameCube`, `Wii`, `Switch`, `Game Boy`, `DS`, `3DS`) the Nintendo theme.
+- Tab names also pick the UI colours:
+
+  | Theme | Tab names that use it |
+  |---|---|
+  | PlayStation | starting with `PS`, or containing `PlayStation` |
+  | Xbox | containing `Xbox` |
+  | Nintendo | `NES`, `SNES`, `Nintendo 64`, `GameCube`, `Wii`, `Switch`, `Game Boy`, `DS`, `3DS` |
+  | Sega | `SG-1000`, `Master System`, `Genesis`/`Mega Drive`, `Sega CD`, `32X`, `Saturn`, `Dreamcast`, `Game Gear` |
+  | SNK | `Neo Geo` |
+  | Bandai | `WonderSwan` |
+  | NEC | `TurboGrafx`, `PC Engine`, `SuperGrafx`, `PC-FX` |
 - To use Google Sheets instead: create a spreadsheet with the same tab names and import each sheet of `games_database.xlsx` into its tab (File > Import in Google Sheets).
 
 ### Adding New Games

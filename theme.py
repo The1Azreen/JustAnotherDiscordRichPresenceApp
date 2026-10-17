@@ -3,7 +3,7 @@ Retro desktop theme modelled on the1azreen.neocities.org, plus custom tkinter wi
 
 Panels are "windows" with a neon border, a title bar and a bordered content
 area; the footer is a taskbar. The colours follow the selected console's brand
-(PlayStation blue, Xbox green, Nintendo red) and switch live via set_palette().
+(PlayStation, Xbox, Nintendo, Sega, SNK, Bandai, NEC) and switch live via set_palette().
 """
 import os
 import tkinter as tk
@@ -69,18 +69,49 @@ BRANDS = {
                      content="#1E0709", input="#120405", border="#FF6B76", text="#FFE6E8",
                      strong="#FFF6F6", muted="#C79297", accent="#E60012", accent_fg="#FFF6F6",
                      taskbar="#B3000E", taskbar_fg="#FFF6F6"),
+    # Sega blue with Sonic-yellow highlights, so it doesn't read as PlayStation
+    "sega": dict(name="Sega", desktop="#040E1C", window="#0A2A52", outer="#12407A",
+                 content="#071A33", input="#040F1F", border="#E6F2FF", text="#DDEBFA",
+                 strong="#FFFFF4", muted="#8DA9C9", accent="#FFCC00", accent_fg="#0A1C33",
+                 taskbar="#0089CF", taskbar_fg="#FFFFF4"),
+    # Neo Geo black and gold, with SNK red on the taskbar
+    "snk": dict(name="SNK", desktop="#0A0907", window="#1F1A12", outer="#3A3020",
+                content="#14110C", input="#0B0A07", border="#D4AF37", text="#F1E6C8",
+                strong="#FFF4D6", muted="#A8996F", accent="#E8C547", accent_fg="#1A1408",
+                taskbar="#C8102E", taskbar_fg="#FFF4D6"),
+    # Bandai orange and amber
+    "bandai": dict(name="Bandai", desktop="#140A03", window="#33190A", outer="#552B12",
+                   content="#1F0F06", input="#120802", border="#FFB000", text="#FFE9D2",
+                   strong="#FFF7EC", muted="#C29A78", accent="#F08300", accent_fg="#1F0F06",
+                   taskbar="#E8590C", taskbar_fg="#FFF7EC"),
+    # NEC navy with TurboGrafx orange
+    "nec": dict(name="NEC", desktop="#07081A", window="#151A4A", outer="#232B72",
+                content="#0C1030", input="#060820", border="#9FB4FF", text="#E0E6FF",
+                strong="#F7F8FF", muted="#8C95C4", accent="#F15A22", accent_fg="#FFF7F2",
+                taskbar="#1F2A8C", taskbar_fg="#F7F8FF"),
 }
 
+# Words in a console sheet name that pick a brand, checked in this order
+BRAND_KEYWORDS = (
+    ("sega", ("sega", "genesis", "mega drive", "master system", "saturn", "dreamcast",
+              "game gear", "32x", "sg-1000")),
+    ("snk", ("neo geo", "neo-geo", "snk")),
+    ("bandai", ("wonderswan", "bandai", "playdia")),
+    ("nec", ("turbografx", "pc engine", "pc-engine", "supergrafx", "pc-fx", "nec")),
+)
 NINTENDO_WORDS = ("nes", "snes", "n64", "ds", "3ds", "wii", "switch", "gamecube")
 
 
 def brand_for(console):
-    """Map a console sheet name (PS2, Xbox 360, Wii U...) to a BRANDS key."""
+    """Map a console sheet name (PS2, Xbox 360, Wii U, Saturn...) to a BRANDS key."""
     name = (console or "").strip().lower()
     if name.startswith("ps") or "playstation" in name:
         return "sony"
     if "xbox" in name:
         return "xbox"
+    for brand, keywords in BRAND_KEYWORDS:
+        if any(word in name for word in keywords):
+            return brand
     if ("nintendo" in name or "game boy" in name
             or any(word in NINTENDO_WORDS for word in name.split())):
         return "nintendo"
